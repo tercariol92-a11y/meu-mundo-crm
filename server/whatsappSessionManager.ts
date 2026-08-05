@@ -83,6 +83,59 @@ async function saveMedia(s: WhatsAppSession, msg: any, scope: string, id: string
     return { mediaStatus: 'error', mediaError: 'Não foi possível armazenar a mídia.' };
   }
 }
+
+function timestampMillis(value: any): number {
+  if (!value) return 0;
+  if (typeof value.toMillis === 'function') return value.toMillis();
+  if (typeof value.toDate === 'function') return value.toDate().getTime();
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function refreshContactAvatar(s: WhatsAppSession, msg: any, phone: string, leadData: any) {
+  if (msg.key.fromMe || !s.socket) return {};
+  const updatedAt = timestampMillis(leadData?.profilePictureUpdatedAt);
+  if (leadData?.profilePictureUrl && Date.now() - updatedAt < 24 * 60 * 60 * 1000) return {};
+
+  const candidates = [msg.key.remoteJidAlt, msg.key.remoteJid, msg.key.participant, `${phone}@s.whatsapp.net`]
+    .map(value => String(value || '').trim())
+    .filter((value, index, list) => value && list.indexOf(value) === index)
+    .filter(value => !value.endsWith('@g.us') && value !== 'status@broadcast' && !value.includes('newsletter'));
+  for (const jid of candidates) {
+    try {
+      console.log(`[WhatsApp Avatar] buscando foto; JID=${jid}; telefone=${phone}`);
+      const temporaryUrl = await s.socket.profilePictureUrl(jid, 'image');
+      if (!temporaryUrl) continue;
+      const response = await fetch(temporaryUrl);
+      if (!response.ok) throw new Error(`download HTTP ${response.status}`);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const contentType = response.headers.get('content-type') || 'image/jpeg';
+      const storagePath = `whatsapp-profile-pictures/${s.userId}/${phone}/avatar.jpg`;
+      const bucket = getStorage().bucket();
+      const token = randomUUID();
+      await bucket.file(storagePath).save(buffer, {
+        resumable: false,
+        metadata: {
+          contentType,
+          cacheControl: 'public,max-age=86400',
+          metadata: { firebaseStorageDownloadTokens: token, telefone: phone, origem: 'WhatsApp QR Code', ownerUserId: s.userId }
+        }
+      });
+      const permanentUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(token)}`;
+      console.log(`[WhatsApp Avatar] foto salva; JID=${jid}; telefone=${phone}`);
+      return {
+        profilePictureUrl: permanentUrl,
+        photoUrl: permanentUrl,
+        avatarUrl: permanentUrl,
+        profilePictureUpdatedAt: FieldValue.serverTimestamp()
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'indisponível';
+      console.log(`[WhatsApp Avatar] foto não disponível; JID=${jid}; motivo=${message}`);
+    }
+  }
+  return { profilePictureUpdatedAt: FieldValue.serverTimestamp() };
+}
 async function onMessage(s:WhatsAppSession,msg:any){const jid=msg.key.remoteJid||'';if(jid==='status@broadcast'||jid.includes('newsletter'))return;const isGroup=jid.endsWith('@g.us');if(!isGroup&&!jid.endsWith('@s.whatsapp.net')&&!jid.endsWith('@lid'))return;const x=extract(msg.message);if(!x)return;const id=msg.key.id||`msg-${Date.now()}`;const o=await owner(s.userId);if(isGroup){const meta=await s.socket!.groupMetadata(jid);const gid=groupDocId(s.userId,jid);const ref=db.collection('whatsapp_groups').doc(gid);const mref=ref.collection('messages').doc(id);if((await mref.get()).exists)return;const participant=msg.key.participant||msg.participant||'';const pname=msg.key.fromMe?'WhatsApp Web':msg.pushName||phoneOf(participant)||'Participante';const media=await saveMedia(s,msg,`group-${gid}`,id);await mref.set({messageId:id,remoteJid:jid,groupId:gid,groupName:meta.subject,isGroup:true,participantJid:participant,participantPhone:phoneOf(participant),participantName:pname,body:x.body,mensagem:x.body,type:x.type,direction:msg.key.fromMe?'out':'in',fromMe:!!msg.key.fromMe,status:msg.key.fromMe?'sent':'received',ownerUserId:s.userId,whatsappOwnerUserId:s.userId,whatsappSessionId:s.userId,sessionPhone:s.phone,sentByUserId:null,...media,timestamp:FieldValue.serverTimestamp(),createdAt:FieldValue.serverTimestamp()});await ref.set({groupId:gid,groupJid:jid,remoteJid:jid,name:meta.subject,subject:meta.subject,participantsCount:meta.participants.length,isGroup:true,ownerUserId:s.userId,whatsappOwnerUserId:s.userId,whatsappSessionId:s.userId,sessionPhone:s.phone,lastMessage:`${pname}: ${x.body}`,lastMessageAt:FieldValue.serverTimestamp(),lastMessageId:id,...(!msg.key.fromMe?{unreadCount:FieldValue.increment(1)}:{}),updatedAt:FieldValue.serverTimestamp()},{merge:true});return}
 const raw=jid.endsWith('@lid')?(msg.key.remoteJidAlt||''):jid;if(!raw.endsWith('@s.whatsapp.net'))return;const phone=phoneOf(raw);const leads=db.collection('leads');const q=await leads.where('whatsappOwnerUserId','==',s.userId).where('telefone','==',phone).limit(1).get();const ref=q.empty?leads.doc():q.docs[0].ref;const mref=ref.collection('messages').doc(id);if((await mref.get()).exists)return;const media=await saveMedia(s,msg,phone,id);await mref.set({messageId:id,metaMessageId:id,telefone:phone,phone,body:x.body,mensagem:x.body,type:x.type,direction:msg.key.fromMe?'out':'in',fromMe:!!msg.key.fromMe,status:msg.key.fromMe?'sent':'received',ownerUserId:s.userId,whatsappOwnerUserId:s.userId,whatsappSessionId:s.userId,sessionPhone:s.phone,sentByUserId:null,...media,timestamp:FieldValue.serverTimestamp(),createdAt:FieldValue.serverTimestamp()});await ref.set({nome:msg.pushName||'Contato WhatsApp',telefone:phone,phone,whatsapp:phone,channel:'whatsapp_qr',ownerUserId:s.userId,ownerUserName:o.name,ownerUserEmail:o.email,whatsappOwnerUserId:s.userId,whatsappSessionId:s.userId,sessionPhone:s.phone,assignedUserId:s.userId,assignedUserName:o.name,ultimaMensagem:x.body,lastMessage:x.body,lastMessageAt:FieldValue.serverTimestamp(),lastMessageId:id,...(!msg.key.fromMe?{unreadCount:FieldValue.increment(1)}:{}),updatedAt:FieldValue.serverTimestamp(),status:'Em atendimento'},{merge:true});if(!msg.key.fromMe&&x.type==='text'){await processSatisfactionResponse(db,{phone,sessionOwnerUid:s.userId,messageId:id,text:x.body,leadId:ref.id,sendAcknowledgement:(text)=>sendSessionMessage(s.userId,phone,text)})}}
 
@@ -151,6 +204,7 @@ async function onSessionMessage(s: WhatsAppSession, msg: any) {
   }
 
   const media = await saveMedia(s, msg, phone, messageId);
+  const avatarFields = await refreshContactAvatar(s, msg, phone, leadData);
   const timestamp = FieldValue.serverTimestamp();
   await messageRef.set({
     messageId, metaMessageId: messageId, telefone: phone, phone,
@@ -192,6 +246,7 @@ async function onSessionMessage(s: WhatsAppSession, msg: any) {
     ownerUserEmail: ownerData.email, whatsappOwnerUserId: s.userId, whatsappSessionId: s.userId,
     sessionPhone: s.phone, assignedUserId: leadData?.assignedUserId || s.userId,
     assignedUserName: leadData?.assignedUserName || ownerData.name,
+    ...avatarFields,
     ultimaMensagem: extracted.body, lastMessage: extracted.body, lastMessageAt: timestamp, lastMessageId: messageId,
     ...(keepFinalized
       ? { status: 'Finalizado', attendanceStatus: 'Finalizado', unreadCount: 0 }
