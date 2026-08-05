@@ -30,14 +30,9 @@ import {
   Play
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { parseApiResponse } from '../../utils/apiResponse';
+import { whatsappApi } from '../../services/whatsappApi';
 
 export default function WhatsAppSettings() {
-  const authenticatedWhatsAppFetch = async (url: string, init: RequestInit = {}) => {
-    const token = await auth.currentUser?.getIdToken();
-    if (!token) throw new Error('Sessão do usuário não autenticada.');
-    return fetch(getAbsoluteUrl(url), { ...init, headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` } });
-  };
   const [config, setConfig] = useState<WhatsAppConfig | null>(null);
   const [templates, setTemplates] = useState<WhatsAppTemplate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -82,30 +77,10 @@ export default function WhatsAppSettings() {
   const [testTrace, setTestTrace] = useState<any[]>([]);
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
 
-  const getAbsoluteUrl = (path: string) => {
-    try {
-      const origin = window.location.origin && window.location.origin !== 'null'
-        ? window.location.origin
-        : (window.location.href && window.location.href.startsWith('http') ? new URL(window.location.href).origin : '');
-      if (origin && origin !== 'null' && (origin.startsWith('http://') || origin.startsWith('https://'))) {
-        return `${origin.replace(/\/$/, '')}${path}`;
-      }
-    } catch (e) {
-      console.warn('Failed to resolve absolute URL:', e);
-    }
-    return path;
-  };
-
   const loadDiagnostics = async () => {
     setLoadingDiagnostics(true);
     try {
-      const res = await authenticatedWhatsAppFetch('/api/whatsapp/diagnostics');
-      if (res.ok) {
-        const data = await res.json();
-        setDiagnostics(data);
-      } else {
-        console.warn('Diagnostics response was not ok:', res.status, res.statusText);
-      }
+      setDiagnostics(await whatsappApi.getDiagnostics());
     } catch (err: any) {
       console.error('Error fetching WhatsApp diagnostics:', err);
       if (err instanceof Error) {
@@ -123,13 +98,7 @@ export default function WhatsAppSettings() {
   const loadEnvironmentVerification = async () => {
     setLoadingVerify(true);
     try {
-      const res = await authenticatedWhatsAppFetch('/api/whatsapp/verify-environment', { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        setEnvVerify(data);
-      } else {
-        console.warn('Verify environment response was not ok:', res.status, res.statusText);
-      }
+      setEnvVerify(await whatsappApi.verifyEnvironment());
     } catch (err: any) {
       console.error('Error verifying environment:', err);
       if (err instanceof Error) {
@@ -148,8 +117,8 @@ export default function WhatsAppSettings() {
     setLoadingVerify(true);
     setLoadingDiagnostics(true);
     try {
-      const p1 = authenticatedWhatsAppFetch('/api/whatsapp/diagnostics').then(r => r.ok ? r.json() : null);
-      const p2 = authenticatedWhatsAppFetch('/api/whatsapp/verify-environment', { method: 'POST' }).then(r => r.ok ? r.json() : null);
+      const p1 = whatsappApi.getDiagnostics();
+      const p2 = whatsappApi.verifyEnvironment();
       const [diagData, verifyData] = await Promise.all([p1, p2]);
       if (diagData) setDiagnostics(diagData);
       if (verifyData) setEnvVerify(verifyData);
@@ -166,20 +135,7 @@ export default function WhatsAppSettings() {
     setError(null);
     setSuccess(null);
     try {
-      const res = await fetch(getAbsoluteUrl('/api/whatsapp/sync-templates'), { method: 'POST' });
-      const data = await parseApiResponse(res, { method: 'POST', uid: auth.currentUser?.uid });
-      if (!res.ok) {
-        throw new Error(data.error || 'Falha ao sincronizar templates.');
-      }
-      setSuccess(`Sincronização realizada com sucesso! ${data.syncedCount} templates importados (${data.approvedCount} aprovados/ativos).`);
-      
-      // Refresh template lists
-      const templatesData = await databaseService.getWhatsAppTemplates();
-      setTemplates(templatesData || []);
-      
-      // Refresh diagnostics and verification
-      await loadDiagnostics();
-      await loadEnvironmentVerification();
+      throw new Error('Sincronização de templates não está disponível no serviço QR Code/Baileys. Use a integração oficial Meta para essa operação.');
     } catch (err: any) {
       console.error('Error syncing templates:', err);
       setError(err.message || 'Erro durante sincronização de templates da Gupshup.');
@@ -203,23 +159,13 @@ export default function WhatsAppSettings() {
     try {
       const paramsArray = testParams ? testParams.split(',').map(s => s.trim()) : [];
       
-      const res = await fetch(getAbsoluteUrl('/api/whatsapp/send-template'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          destination: testPhone,
-          templateName: testTemplateAlias,
-          params: paramsArray
-        })
-      });
-
-      const data = await res.json();
+      const data = await whatsappApi.sendTemplate({ destination: testPhone, templateName: testTemplateAlias, params: paramsArray });
 
       if (data.trace) {
         setTestTrace(data.trace);
       }
 
-      if (res.ok && data.success) {
+      if (data.success) {
         setTestResultStatus('success');
         setTestResultDetails(`Sucesso! Mensagem enviada via ${data.method || 'API'}. Conteúdo: "${data.message || ''}"`);
         // Refresh diagnostics logs
@@ -363,9 +309,7 @@ export default function WhatsAppSettings() {
     setError(null);
     setSuccess(null);
     try {
-      const res = await authenticatedWhatsAppFetch('/api/whatsapp/qr/connect', { method: 'POST' });
-      const data = await parseApiResponse(res, { method: 'POST', uid: auth.currentUser?.uid });
-      if (!res.ok) throw new Error(data.error || 'Falha ao iniciar conexão.');
+      const data = await whatsappApi.getQr('connect');
       setSuccess('Sessão de conexão inicializada na nuvem com sucesso! Gerando o QR Code...');
       if (data.status) {
         setSessionData(data.status);
@@ -375,9 +319,7 @@ export default function WhatsAppSettings() {
       const deadline = Date.now() + 45_000;
       while (Date.now() < deadline) {
         await new Promise(resolve => window.setTimeout(resolve, 750));
-        const statusResponse = await authenticatedWhatsAppFetch('/api/whatsapp/qr/status');
-        const statusBody = await parseApiResponse(statusResponse, { method: 'GET', uid: auth.currentUser?.uid });
-        if (!statusResponse.ok) throw new Error(statusBody.error || 'Falha ao consultar o QR Code.');
+        const statusBody = await whatsappApi.getStatus();
         const ownStatus = statusBody.status;
         if (!ownStatus || ownStatus.uid !== auth.currentUser?.uid) {
           throw new Error('O servidor retornou uma sessão que não pertence ao usuário autenticado.');
@@ -411,9 +353,7 @@ export default function WhatsAppSettings() {
     setError(null);
     setSuccess(null);
     try {
-      const res = await authenticatedWhatsAppFetch('/api/whatsapp/qr/reconnect', { method: 'POST' });
-      const data = await parseApiResponse(res, { method: 'POST', uid: auth.currentUser?.uid });
-      if (!res.ok) throw new Error(data.error || 'Falha ao reiniciar canais.');
+      await whatsappApi.getQr('reconnect');
       setSuccess('Reconexão solicitada com sucesso! Gerando novo código QR...');
     } catch (err: any) {
       console.error('Error reconnecting QR:', err);
@@ -429,9 +369,7 @@ export default function WhatsAppSettings() {
     setError(null);
     setSuccess(null);
     try {
-      const res = await authenticatedWhatsAppFetch('/api/whatsapp/qr/disconnect', { method: 'POST' });
-      const data = await parseApiResponse(res, { method: 'POST', uid: auth.currentUser?.uid });
-      if (!res.ok) throw new Error(data.error || 'Falha ao encerrar.');
+      await whatsappApi.disconnect(true);
       setSuccess('Sessão encerrada e dispositivo removido com sucesso!');
     } catch (err: any) {
       console.error('Error disconnecting from QR API:', err);
@@ -447,10 +385,7 @@ export default function WhatsAppSettings() {
     setTestError(null);
     setTestResults(null);
     try {
-      const res = await authenticatedWhatsAppFetch('/api/whatsapp/qr/run-test', { method: 'POST' });
-      const data = await parseApiResponse(res, { method: 'POST', uid: auth.currentUser?.uid });
-      if (!res.ok) throw new Error(data.error || 'A suíte de testes retornou falhas.');
-      setTestResults(data);
+      setTestResults(await whatsappApi.runConnectionTest());
     } catch (err: any) {
       console.error('Error in run-test request:', err);
       setTestError(err.message || 'Erro crítico ao rodar testes.');

@@ -13,7 +13,7 @@ type VercelResponseLike = {
 
 type ProxyOptions = {
   method: 'GET' | 'POST';
-  upstreamAction: 'status' | 'connect' | 'disconnect';
+  upstreamAction: 'status' | 'connect' | 'disconnect' | 'reconnect';
 };
 
 export async function proxyWhatsAppRequest(

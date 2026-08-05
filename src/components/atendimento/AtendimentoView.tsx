@@ -42,6 +42,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { databaseService } from '../../services/databaseService';
 import { whatsappService } from '../../services/whatsapp.service';
+import { whatsappApi } from '../../services/whatsappApi';
 import { Conversation, ChatMessage, Usuario, ConversationStatus, Chamado, Cliente, Proposta, Lead, WhatsAppTemplate } from '../../types';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -165,7 +166,7 @@ function IncomingImage({ message }: { message: ChatMessage }) {
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const legacyMessage = message as ChatMessage & { messageId?: string; imageUrl?: string; fileUrl?: string; url?: string };
-  const mediaUrl = message.mediaUrl || legacyMessage.imageUrl || legacyMessage.fileUrl || legacyMessage.url || null;
+  const mediaUrl = whatsappApi.resolveMediaUrl(legacyMessage);
   useEffect(() => {
     console.log('[IMAGE RENDER]', { messageId: legacyMessage.messageId || message.id, type: message.type, mediaUrl, thumbnailUrl: message.thumbnailUrl || '' });
   }, [legacyMessage.messageId, message.id, message.type, mediaUrl, message.thumbnailUrl]);
@@ -918,17 +919,8 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
       formData.append('attendantId', attendantId);
       formData.append('attendantEmail', attendantEmail);
       formData.append('manualFromAtendimento', 'true');
-      const idToken = await auth.currentUser?.getIdToken().catch(() => undefined);
-      const response = await fetch('/api/whatsapp/send-media', {
-        method: 'POST',
-        headers: idToken ? { Authorization: `Bearer ${idToken}` } : undefined,
-        body: formData
-      });
-      const contentType = response.headers.get('content-type') || '';
-      const result = contentType.includes('application/json')
-        ? await response.json()
-        : { success: false, error: await response.text() || 'Resposta inválida do servidor.' };
-      if (!response.ok || !result.success || !result.messageId) {
+      const result = await whatsappApi.sendImage(formData);
+      if (!result.success || !result.messageId) {
         throw new Error(result.error || 'Não foi possível enviar a imagem.');
       }
       setSelectedFile(null);

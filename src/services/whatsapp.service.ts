@@ -4,7 +4,7 @@
  * This service provides a clean interface for the frontend to trigger
  * WhatsApp messages via the backend API, keeping API keys secure.
  */
-import { auth } from '../firebase';
+import { whatsappApi } from './whatsappApi';
 
 
 export type WhatsAppTemplate = 
@@ -32,34 +32,7 @@ export const whatsappService = {
       
       console.log(`Triggering WhatsApp template ${templateName} for ${cleanDestination}...`);
       
-      const response = await fetch('/api/whatsapp/send-template', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          destination: cleanDestination,
-          templateName,
-          params,
-        }),
-      });
-
-      const contentType = response.headers.get('content-type');
-      let data;
-      
-      if (contentType && contentType.includes('application/json')) {
-        data = await response.json();
-      } else {
-        const textError = await response.text();
-        console.error('Non-JSON response from WhatsApp Send Template API:', textError);
-        return { success: false, error: `Erro no servidor (não JSON): ${textError.substring(0, 100)}...` };
-      }
-      
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to send WhatsApp message');
-      }
-
-      return data;
+      return await whatsappApi.sendTemplate({ destination: cleanDestination, templateName, params });
     } catch (error) {
       console.error('Error in whatsappService.sendTemplate:', error);
       // We don't throw here to avoid breaking the main flow if WhatsApp fails
@@ -150,14 +123,7 @@ export const whatsappService = {
       const cleanPhone = phone.replace(/\D/g, '');
       const telefoneWhatsApp = manualContext?.isGroup ? phone.trim() : (cleanPhone.startsWith('55') ? cleanPhone : `55${cleanPhone}`);
 
-      const idToken = await auth.currentUser?.getIdToken().catch(() => undefined);
-      const response = await fetch('/api/whatsapp/send', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
-        },
-        body: JSON.stringify({ 
+      return await whatsappApi.sendMessage({
           telefone: telefoneWhatsApp, 
           mensagem: mensagem.trim(),
           attendantName: attendant,
@@ -171,25 +137,7 @@ export const whatsappService = {
           ,atendimentoId: manualContext?.atendimentoId
           ,clientId: manualContext?.clientId
           ,ticketId: manualContext?.ticketId
-        }),
       });
-
-      const contentType = response.headers.get('content-type');
-      let data;
-      
-      if (contentType && contentType.includes('application/json')) {
-        data = await response.json();
-      } else {
-        const textError = await response.text();
-        console.error('Non-JSON response from WhatsApp API:', textError);
-        throw new Error(`A API retornou uma resposta inválida. O administrador foi notificado.`);
-      }
-
-      if (!data.success) {
-        throw new Error(data.error || 'Erro ao enviar WhatsApp');
-      }
-      
-      return data;
     } catch (error) {
       console.error('Error in whatsappService.sendMessage:', error);
       throw error;

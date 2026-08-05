@@ -13,6 +13,7 @@ import {
 } from './resilientFirestoreClient';
 import { db } from '../firebase';
 import { Lead } from '../types';
+import { whatsappApi } from './whatsappApi';
 
 export interface ProspectResult {
   id: string;
@@ -245,16 +246,10 @@ export const prospectingService = {
 
       // 1. Send the actual WhatsApp message by invoking the API endpoint
       try {
-        await fetch('/api/whatsapp/send', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
+        await whatsappApi.sendMessage({
             telefone: normalizedPhone,
             mensagem: text.trim(),
             atendente: attendant
-          })
         });
       } catch (apiErr) {
         console.warn('WhatsApp API deliver simulation:', apiErr);

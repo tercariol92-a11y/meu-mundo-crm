@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { AlertCircle, CheckCircle2, Loader2, Power, QrCode, RefreshCw, Smartphone, Wifi, WifiOff } from 'lucide-react';
 import { auth } from '../../firebase';
-import { parseApiResponse } from '../../utils/apiResponse';
+import { whatsappApi } from '../../services/whatsappApi';
 
 type OwnSessionStatus = 'connected' | 'disconnected' | 'connecting' | 'qrcode';
 type OwnSession = {
@@ -24,16 +24,6 @@ export default function MyWhatsAppSettings() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  const authenticatedFetch = async (path: string, init: RequestInit = {}) => {
-    const currentUser = auth.currentUser;
-    if (!currentUser) throw new Error('Usuário não autenticado. Entre novamente no sistema.');
-    const token = await currentUser.getIdToken();
-    return fetch(path, {
-      ...init,
-      headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` }
-    });
-  };
-
   const applyStatus = (ownSession: OwnSession) => {
     const currentUid = auth.currentUser?.uid;
     const returnedUid = ownSession.uid || ownSession.userId;
@@ -48,9 +38,7 @@ export default function MyWhatsAppSettings() {
     const deadline = Date.now() + 45_000;
     while (Date.now() < deadline) {
       await new Promise(resolve => window.setTimeout(resolve, 750));
-      const response = await authenticatedFetch('/api/whatsapp/qr/status');
-      const body = await parseApiResponse(response, { method: 'GET', uid: auth.currentUser?.uid });
-      if (!response.ok) throw new Error(body.error || 'Não foi possível consultar sua sessão.');
+      const body = await whatsappApi.getStatus();
       applyStatus(body.status || {});
       if (body.status?.status === 'qrcode' && body.status?.qrCodeDataUrl) return 'qrcode';
       if (body.status?.status === 'connected') return 'connected';
@@ -66,11 +54,7 @@ export default function MyWhatsAppSettings() {
       setSession(null);
       setStatus('disconnected');
       if (!firebaseUser) return;
-      const refreshStatus = () => void firebaseUser.getIdToken().then(token =>
-          fetch('/api/whatsapp/qr/status', { headers: { Authorization: `Bearer ${token}` } })
-        ).then(async response => {
-          const body = await parseApiResponse(response, { method: 'GET', uid: firebaseUser.uid });
-          if (!response.ok) throw new Error(body.error || 'Não foi possível consultar sua sessão.');
+      const refreshStatus = () => void whatsappApi.getStatus().then(async body => {
           applyStatus(body.status || {});
         }).catch(statusError => {
           setError(statusError instanceof Error ? statusError.message : 'Não foi possível consultar sua sessão.');
@@ -81,13 +65,11 @@ export default function MyWhatsAppSettings() {
     return () => { if (statusTimer) window.clearInterval(statusTimer); unsubscribeAuth(); };
   }, []);
 
-  const startConnection = async (endpoint: '/api/whatsapp/qr/connect' | '/api/whatsapp/qr/reconnect') => {
+  const startConnection = async (action: 'connect' | 'reconnect') => {
     if (loading) return;
     setLoading(true); setError(''); setSuccess('');
     try {
-      const response = await authenticatedFetch(endpoint, { method: 'POST' });
-      const body = await parseApiResponse(response, { method: 'POST', uid: auth.currentUser?.uid });
-      if (!response.ok) throw new Error(body.error || 'Não foi possível iniciar sua conexão.');
+      const body = await whatsappApi.getQr(action);
       if (body.status) applyStatus(body.status);
       const result = await pollOwnStatus();
       setSuccess(result === 'connected' ? 'Seu WhatsApp foi conectado.' : 'QR Code gerado. Leia-o no seu WhatsApp.');
@@ -102,9 +84,7 @@ export default function MyWhatsAppSettings() {
     if (loading || !window.confirm('Deseja desconectar somente o seu WhatsApp?')) return;
     setLoading(true); setError(''); setSuccess('');
     try {
-      const response = await authenticatedFetch('/api/whatsapp/qr/disconnect', { method: 'POST' });
-      const body = await parseApiResponse(response, { method: 'POST', uid: auth.currentUser?.uid });
-      if (!response.ok) throw new Error(body.error || 'Não foi possível desconectar sua sessão.');
+      await whatsappApi.disconnect();
       setSession(null); setStatus('disconnected'); setSuccess('Sua sessão foi desconectada.');
     } catch (disconnectError) {
       setError(disconnectError instanceof Error ? disconnectError.message : 'Falha ao desconectar sua sessão.');
@@ -142,11 +122,11 @@ export default function MyWhatsAppSettings() {
 
         <div className="flex flex-wrap gap-3 justify-center">
           {status === 'disconnected' ? (
-            <button onClick={() => startConnection('/api/whatsapp/qr/connect')} disabled={loading || !uid} className="px-6 py-2.5 bg-primary text-white text-xs font-black uppercase tracking-widest rounded-xl flex items-center gap-2 disabled:opacity-60">
+            <button onClick={() => startConnection('connect')} disabled={loading || !uid} className="px-6 py-2.5 bg-primary text-white text-xs font-black uppercase tracking-widest rounded-xl flex items-center gap-2 disabled:opacity-60">
               {loading ? <Loader2 className="animate-spin" size={18} /> : <Power size={18} />} Gerar QR Code
             </button>
           ) : (
-            <button onClick={() => startConnection('/api/whatsapp/qr/reconnect')} disabled={loading} className="px-6 py-2.5 bg-primary text-white text-xs font-black uppercase tracking-widest rounded-xl flex items-center gap-2 disabled:opacity-60">
+            <button onClick={() => startConnection('reconnect')} disabled={loading} className="px-6 py-2.5 bg-primary text-white text-xs font-black uppercase tracking-widest rounded-xl flex items-center gap-2 disabled:opacity-60">
               {loading ? <Loader2 className="animate-spin" size={18} /> : <RefreshCw size={18} />} Reconectar
             </button>
           )}
