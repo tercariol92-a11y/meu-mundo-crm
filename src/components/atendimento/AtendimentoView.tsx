@@ -165,7 +165,6 @@ function renderLinkedText(text: string) {
 
 function IncomingImage({ message }: { message: ChatMessage }) {
   const [loading, setLoading] = useState(true);
-  const [activeSessionId, setActiveSessionId] = useState<string>('');
   const [failed, setFailed] = useState(false);
   const legacyMessage = message as ChatMessage & { messageId?: string; imageUrl?: string; fileUrl?: string; url?: string };
   const mediaUrl = whatsappApi.resolveMediaUrl(legacyMessage);
@@ -203,6 +202,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
   const [searchTerm, setSearchTerm] = useState('');
   const [messageText, setMessageText] = useState('');
   const [loading, setLoading] = useState(true);
+  const [activeSessionId, setActiveSessionId] = useState<string>('');
   const [users, setUsers] = useState<Usuario[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const conversationSnapshotReady = useRef(false);
@@ -1131,8 +1131,8 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
               <MessageSquare size={isCollapsed ? 24 : 48} className="mb-4 opacity-10" />
               {!isCollapsed && (
                 <>
-                  <p className="text-sm font-bold text-[#111b21]/40 mb-1">Nenhuma conversa</p>
-                  <p className="text-xs text-[#667781]/40 uppercase tracking-widest font-black">Ajuste os filtros</p>
+                  <p className="text-sm font-bold text-[#111b21]/40 mb-1">{activeSessionId ? 'Nenhuma conversa' : 'Nenhuma sessão conectada'}</p>
+                  <p className="text-xs text-[#667781]/40 uppercase tracking-widest font-black">{activeSessionId ? 'Ajuste os filtros' : 'Conecte seu WhatsApp em Configurações'}</p>
                 </>
               )}
             </div>
@@ -1730,9 +1730,9 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                 className="w-full h-full object-contain relative z-10 opacity-30 grayscale"
               />
             </div>
-            <h3 className="text-[32px] font-extralight text-[#41525d] mb-4">WhatsApp Web Para Negócios</h3>
+            <h3 className="text-[32px] font-extralight text-[#41525d] mb-4">{activeSessionId ? 'WhatsApp Web Para Negócios' : 'Nenhuma sessão conectada'}</h3>
             <p className="text-sm max-w-md leading-relaxed">
-              Responda seus clientes em tempo real, gerencie leads e converta atendimentos em chamados técnicos diretamente do seu painel CRM.
+              {activeSessionId ? 'Responda seus clientes em tempo real, gerencie leads e converta atendimentos em chamados técnicos diretamente do seu painel CRM.' : 'Conecte seu WhatsApp em Configurações → Meu WhatsApp para iniciar o atendimento.'}
             </p>
             <div className="mt-12 flex items-center gap-2 text-xs opacity-50 uppercase tracking-[2px]">
               <CheckCheck size={16} /> 
