@@ -3237,16 +3237,30 @@ export const databaseService = {
     try {
       console.log('[FINALIZE] Sending satisfaction survey');
       const survey = await whatsappService.sendMessage(telefoneWhatsApp, surveyMsg, finalAttendant, {
+        attendantId: finalizedByUid,
         satisfactionSurvey: true,
         conversationId: leadData?.conversationId || leadId,
         atendimentoId: leadData?.atendimentoId || leadId,
         clientId: leadData?.clienteId || '',
         ticketId: leadData?.ticketId || ''
       });
+      await updateDoc(leadRef, {
+        pesquisaPendente: true,
+        satisfactionSurveyStatus: 'pending',
+        satisfactionRequestId: survey?.surveyRequestId || '',
+        satisfactionRequestMessageId: survey?.messageId || '',
+        updatedAt: serverTimestamp()
+      });
       return { success: true, finalized: true, surveySent: true, survey };
     } catch (surveyError: any) {
       console.warn('[FINALIZE] Satisfaction survey failed:', surveyError);
-      await updateDoc(leadRef, { awaitingSatisfactionRating: false, satisfactionRequestedAt: null, updatedAt: serverTimestamp() }).catch(() => undefined);
+      await updateDoc(leadRef, {
+        awaitingSatisfactionRating: false,
+        pesquisaPendente: false,
+        satisfactionSurveyStatus: 'survey_send_failed',
+        satisfactionSurveyError: surveyError?.message || 'Falha ao enviar pesquisa.',
+        updatedAt: serverTimestamp()
+      }).catch(() => undefined);
       return { success: true, finalized: true, surveySent: false, surveyError: surveyError?.message || 'Falha ao enviar pesquisa.' };
     }
   },

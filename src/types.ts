@@ -461,6 +461,11 @@ export interface Lead {
   motivoPerdaId?: string;
   observacoes?: string;
   pesquisaPendente?: boolean;
+  awaitingSatisfactionRating?: boolean;
+  satisfactionSurveyStatus?: 'pending' | 'answered' | 'survey_send_failed';
+  satisfactionSurveyError?: string;
+  satisfactionRequestId?: string;
+  satisfactionRequestMessageId?: string;
   atendimentoFinalizadoEm?: string;
   atendenteFinalizacao?: string;
   notaSatisfacao?: number;

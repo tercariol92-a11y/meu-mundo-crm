@@ -2,7 +2,7 @@ import express from 'express';
 import Busboy from '@fastify/busboy';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
-import { getFirestore } from 'firebase-admin/firestore';
+import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import {
   connectWhatsApp,
@@ -14,6 +14,7 @@ import {
   sendSessionMedia,
   sendSessionMessage
 } from './whatsappSessionManager';
+import { createSatisfactionRequest } from './satisfactionService';
 
 const PORT = Number(process.env.PORT || 3001);
 const internalSecret = String(process.env.WHATSAPP_INTERNAL_SECRET || '').trim();
@@ -108,7 +109,90 @@ app.post('/api/whatsapp/qr/reconnect', async (req, res, next) => { try { const u
 app.post('/api/whatsapp/qr/disconnect', async (req, res, next) => { try { const uid=uidOf(req);await locked(uid,()=>disconnectWhatsApp(uid,req.body?.clearCredentials===true));res.json({success:true,status:getWhatsAppStatus(uid)}); } catch(error){next(error)} });
 
 app.post('/api/whatsapp/send', async (req, res, next) => {
-  try { const {to,message}=req.body||{};if(!to||!message)return res.status(400).json({success:false,error:'Destino e mensagem são obrigatórios.'});return res.json(await sendSessionMessage(uidOf(req),String(to),String(message))); } catch(error){next(error)}
+  try {
+    const input = req.body || {};
+    const to = String(input.to || '').trim();
+    const message = String(input.message || '').trim();
+    if (!to || !message) return res.status(400).json({success:false,error:'Destino e mensagem são obrigatórios.'});
+
+    const uid = uidOf(req);
+    if (input.satisfactionSurvey !== true) {
+      return res.json(await sendSessionMessage(uid, to, message));
+    }
+
+    const normalizedPhone = to.replace(/\D/g, '');
+    const atendimentoId = String(input.atendimentoId || input.conversationId || '').trim();
+    const contactId = String(input.clientId || input.conversationId || atendimentoId).trim();
+    const jid = to.endsWith('@s.whatsapp.net') ? to : `${normalizedPhone}@s.whatsapp.net`;
+    console.log('[SATISFACTION FINALIZE]', { atendimentoId, contactId, jid, currentStatus: 'sending' });
+
+    return res.json(await locked(`satisfaction:${uid}:${atendimentoId || normalizedPhone}`, async () => {
+      const requestSnapshot = await db.collection('satisfaction_requests').where('normalizedPhone', '==', normalizedPhone).get();
+      const existing = requestSnapshot.docs.find(document => {
+        const data = document.data();
+        return data.attendanceId === atendimentoId &&
+          (!data.whatsappSessionOwnerUid || data.whatsappSessionOwnerUid === uid) &&
+          ['pending', 'sent', 'answered'].includes(String(data.status));
+      });
+      if (existing) {
+        const data = existing.data();
+        console.log('[SATISFACTION SEND]', { atendimentoId, jid, endpoint: '/api/whatsapp/send', success: true, messageId: data.requestMessageId || data.whatsappMessageId || '', duplicatePrevented: true });
+        return { success: true, messageId: data.requestMessageId || data.whatsappMessageId || '', surveyRequestId: existing.id, surveyAlreadyRequested: true };
+      }
+
+      const candidateIds = [...new Set([String(input.conversationId || ''), atendimentoId].filter(Boolean))];
+      let leadRef: any = null;
+      let leadData: any = {};
+      for (const candidateId of candidateIds) {
+        const candidateRef = db.collection('leads').doc(candidateId);
+        const candidate = await candidateRef.get();
+        if (!candidate.exists) continue;
+        const data = candidate.data() || {};
+        if (data.whatsappOwnerUserId && data.whatsappOwnerUserId !== uid) continue;
+        leadRef = candidateRef;
+        leadData = data;
+        break;
+      }
+      if (!leadRef) {
+        const matches = await db.collection('leads').where('whatsappOwnerUserId', '==', uid).where('telefone', '==', normalizedPhone).limit(1).get();
+        if (!matches.empty) {
+          leadRef = matches.docs[0].ref;
+          leadData = matches.docs[0].data();
+        }
+      }
+      if (!leadRef) throw new Error('Lead da pesquisa não encontrado para a sessão autenticada.');
+
+      try {
+        const sent = await sendSessionMessage(uid, to, message);
+        const messageId = String(sent?.messageId || '').trim();
+        if (!messageId) throw new Error('O WhatsApp não confirmou o messageId da pesquisa.');
+        const requestId = await createSatisfactionRequest(db, {
+          conversationId: String(input.conversationId || leadRef.id), leadId: leadRef.id,
+          clientId: String(input.clientId || leadData.clienteId || ''), clientName: leadData.nome || 'Contato WhatsApp',
+          contactPhone: normalizedPhone, atendimentoId: atendimentoId || leadRef.id,
+          ticketId: String(input.ticketId || leadData.ticketId || ''),
+          assignedUserId: leadData.assignedUserId || leadData.responsavelId || uid,
+          assignedUserName: leadData.assignedUserName || leadData.atendenteFinalizacao || 'Atendente',
+          technicianId: leadData.technicianId || leadData.tecnicoId || '',
+          technicianName: leadData.technicianName || leadData.tecnicoNome || leadData.tecnico || '',
+          profilePictureUrl: leadData.profilePictureUrl || '', whatsappSessionOwnerUid: uid,
+          whatsappMessageId: messageId, finalizedAt: leadData.finalizedAt || leadData.atendimentoFinalizadoEm || null
+        });
+        await leadRef.set({
+          awaitingSatisfactionRating: true, pesquisaPendente: true, satisfactionSurveyStatus: 'pending',
+          satisfactionRequestId: requestId, satisfactionRequestMessageId: messageId,
+          satisfactionRequestedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp()
+        }, { merge: true });
+        console.log('[SATISFACTION SEND]', { atendimentoId, jid, endpoint: '/api/whatsapp/send', success: true, messageId });
+        return { ...sent, surveyRequestId: requestId, surveyStatus: 'pending' };
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : 'Falha ao enviar pesquisa.';
+        await leadRef.set({ awaitingSatisfactionRating: false, pesquisaPendente: false, satisfactionSurveyStatus: 'survey_send_failed', satisfactionSurveyError: messageText, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+        console.error('[SATISFACTION ERROR]', { stage: 'send', errorCode: 'SURVEY_SEND_FAILED', message: messageText });
+        throw error;
+      }
+    }));
+  } catch(error){next(error)}
 });
 
 app.post('/api/whatsapp/send-media', (req, res, next) => {

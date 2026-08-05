@@ -116,10 +116,10 @@ export async function processSatisfactionResponse(db: any, input: {
     .sort((a: any, b: any) => timestampMillis(b.data().sentAt) - timestampMillis(a.data().sentAt))[0];
 
   if (!pending) {
-    console.log("[SATISFACTION] No pending survey found");
+    console.log("[SATISFACTION RECEIVE]", { jid: `${normalizedPhone}@s.whatsapp.net`, messageText: String(input.text).trim(), hasPendingSurvey: false });
     return { handled: false };
   }
-  console.log("[SATISFACTION] Pending survey found");
+  console.log("[SATISFACTION RECEIVE]", { jid: `${normalizedPhone}@s.whatsapp.net`, messageText: String(input.text).trim(), hasPendingSurvey: true });
   if (score === null) return { handled: false };
   console.log(`[SATISFACTION] Score detected: ${score}`);
 
@@ -175,6 +175,7 @@ export async function processSatisfactionResponse(db: any, input: {
       batch.set(db.collection("leads").doc(request.leadId || input.leadId), {
         pesquisaPendente: false,
         awaitingSatisfactionRating: false,
+        satisfactionSurveyStatus: "answered",
         satisfactionRating: score,
         satisfactionAnsweredAt: now,
         status: "Finalizado",
@@ -188,7 +189,7 @@ export async function processSatisfactionResponse(db: any, input: {
       }, { merge: true });
     }
   await batch.commit();
-  console.log("[SATISFACTION] Evaluation saved");
+  console.log("[SATISFACTION SAVE]", { atendimentoId: request.atendimentoId || '', rating: score, documentId: input.messageId });
   try {
     const sent = await input.sendAcknowledgement(acknowledgementFor(score));
     await pendingRef.update({ acknowledgementSent: true, acknowledgementMessageId: sent?.messageId || sent?.key?.id || "", updatedAt: FieldValue.serverTimestamp() });

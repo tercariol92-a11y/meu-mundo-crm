@@ -639,13 +639,30 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
       setSelectedId(null);
       console.log('[FINALIZE] Modal closed');
       if (result?.surveySent === false) {
-        toast.success('Atendimento finalizado, mas a mensagem de satisfação não pôde ser enviada.', { duration: 7000 });
+        toast.error('Atendimento finalizado, mas a mensagem de satisfação não pôde ser enviada.', { duration: 7000 });
       } else {
         toast.success('Atendimento finalizado com sucesso.');
       }
     } catch (error: any) {
       console.error('[FINALIZE] Error', error);
       setFinalizeError(error?.message || 'Não foi possível finalizar o atendimento. Tente novamente.');
+    } finally {
+      setIsFinalizing(false);
+    }
+  };
+
+  const handleResendSatisfactionSurvey = async () => {
+    if (isFinalizing || !selectedConversation?.leadId) return;
+    try {
+      setIsFinalizing(true);
+      setFinalizeError(null);
+      const attendantName = user.nome || user.email?.split('@')[0] || 'Atendente';
+      const result = await databaseService.finalizeAtendimento(selectedConversation.leadId, attendantName);
+      if (result?.surveySent === false) throw new Error(result.surveyError || 'Não foi possível reenviar a pesquisa.');
+      toast.success(result?.surveyAlreadyRequested ? 'Já existe uma pesquisa ativa para este atendimento.' : 'Pesquisa de satisfação reenviada.');
+    } catch (error: any) {
+      console.error('[SATISFACTION ERROR]', { stage: 'resend', errorCode: 'SURVEY_RESEND_FAILED', message: error?.message || 'Falha ao reenviar pesquisa.' });
+      toast.error(error?.message || 'Não foi possível reenviar a pesquisa.');
     } finally {
       setIsFinalizing(false);
     }
@@ -1911,6 +1928,18 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
 
             {/* Ações de Conversão */}
             <div className="p-5 bg-white border-t border-[#f0f2f5] flex flex-col gap-3">
+              {selectedConversation.status === 'finalizado' &&
+                selectedConversation.lead?.satisfactionSurveyStatus === 'survey_send_failed' &&
+                ['admin', 'administrador'].includes(String(user.role || '').toLowerCase()) && (
+                  <button
+                    type="button"
+                    onClick={handleResendSatisfactionSurvey}
+                    disabled={isFinalizing}
+                    className="w-full py-3 bg-amber-50 border border-amber-200 rounded-xl text-[10px] font-black uppercase tracking-[0.12em] text-amber-800 hover:bg-amber-100 disabled:opacity-50 transition-all"
+                  >
+                    {isFinalizing ? 'Reenviando pesquisa...' : 'Reenviar pesquisa de satisfação'}
+                  </button>
+                )}
               <div className="grid grid-cols-2 gap-3">
                 <button 
                   onClick={() => setShowFinalizeModal(true)}
