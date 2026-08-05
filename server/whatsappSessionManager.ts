@@ -136,9 +136,10 @@ function normalizeProfileJid(rawJid:string){
   return `${phone}@s.whatsapp.net`;
 }
 
-export async function getSessionProfilePicture(uid:string,rawJid:string,force=false){
+export async function getSessionProfilePicture(uid:string,rawJid:string,force=false,requestedSessionId='',contactId=''){
   const s=getWhatsAppSession(uid);
   if(!s?.socket||s.status!=='connected')throw new Error('WHATSAPP_SESSION_DISCONNECTED');
+  if(requestedSessionId&&requestedSessionId!==s.sessionId)throw new Error('WHATSAPP_SESSION_MISMATCH');
   const jid=normalizeProfileJid(rawJid);
   const isGroup=jid.endsWith('@g.us');
   const phone=phoneOf(jid);
@@ -146,8 +147,10 @@ export async function getSessionProfilePicture(uid:string,rawJid:string,force=fa
   const collection=db.collection(collectionName);
   const queryField=isGroup?'remoteJid':'telefone';
   const queryValue=isGroup?jid:phone;
-  const owned=await collection.where('whatsappSessionId','==',s.sessionId).where(queryField,'==',queryValue).limit(1).get();
-  let snapshot=owned.empty?null:owned.docs[0];
+  let snapshot:any=null;
+  const safeContactId=String(contactId||'').replace(/^group:/,'').trim();
+  if(safeContactId){const direct=await collection.doc(safeContactId).get();if(direct.exists&&direct.data()?.whatsappSessionId===s.sessionId)snapshot=direct}
+  if(!snapshot){const sessionDocuments=await collection.where('whatsappSessionId','==',s.sessionId).get();snapshot=sessionDocuments.docs.find((document:any)=>document.data()?.[queryField]===queryValue)||null}
   if(!snapshot) snapshot=null;
   const ref=snapshot?.ref||(isGroup?collection.doc(groupDocId(s.sessionId,jid)):collection.doc());
   const current=snapshot?.data()||{};
@@ -162,7 +165,7 @@ export async function getSessionProfilePicture(uid:string,rawJid:string,force=fa
       if(code===401||code===403||code===404)return undefined;
       throw error;
     });
-    const baseFields={firebaseUid:uid,sessionId:s.sessionId,whatsappSessionId:s.sessionId,connectedPhone:s.phone,jid,phone,contactName:current.nome||current.name||current.subject||current.pushName||(isGroup?'Grupo WhatsApp':'Contato WhatsApp'),profilePictureUpdatedAt:FieldValue.serverTimestamp()};
+    const baseFields={firebaseUid:uid,sessionId:s.sessionId,whatsappSessionId:s.sessionId,connectedPhone:s.phone,contactId:ref.id,jid,phone,contactName:current.nome||current.name||current.subject||current.pushName||(isGroup?'Grupo WhatsApp':'Contato WhatsApp'),profilePictureUpdatedAt:FieldValue.serverTimestamp()};
     if(!temporaryUrl){
       await ref.set(baseFields,{merge:true});
       console.log('[PROFILE PICTURE RESULT]',{jid,found:false,stored:false});

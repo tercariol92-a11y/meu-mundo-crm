@@ -105,10 +105,14 @@ export const whatsappApi = {
     }));
   },
 
-  async getProfilePicture(jid: string, refresh = false) {
+  async getProfilePicture(jid: string, options: { refresh?: boolean; sessionId?: string; contactId?: string } = {}) {
     const normalizedJid = String(jid || '').trim();
     if (!normalizedJid) return { success: true, profilePictureUrl: null };
-    const suffix = refresh ? '?refresh=true' : '';
+    const search = new URLSearchParams();
+    if (options.refresh) search.set('refresh', 'true');
+    if (options.sessionId) search.set('sessionId', options.sessionId);
+    if (options.contactId) search.set('contactId', options.contactId);
+    const suffix = search.size ? `?${search.toString()}` : '';
     return parseResponse(await authenticatedRequest(`/api/whatsapp/profile-picture/${encodeURIComponent(normalizedJid)}${suffix}`));
   },
 

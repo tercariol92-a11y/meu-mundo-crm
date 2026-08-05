@@ -216,17 +216,38 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
   const [highlightedConversation, setHighlightedConversation] = useState<string | null>(null);
   const requestedProfilePictures = useRef(new Set<string>());
 
+  useEffect(() => {
+    requestedProfilePictures.current.clear();
+  }, [activeSessionId]);
+
+  const requestConversationAvatar = useCallback(async (conversation: Conversation) => {
+    if (!activeSessionId || getConversationAvatar(conversation)) return;
+    const rawJid = String(conversation.remoteJid || conversation.lead?.whatsappJid || conversation.lead?.profilePictureJid || conversation.phone || '').trim();
+    const contactId = String(conversation.isGroup ? (conversation.groupId || conversation.id) : (conversation.leadId || conversation.lead?.id || conversation.id)).replace(/^group:/, '');
+    if (!rawJid || !contactId) return;
+    const cacheKey = `${user.id}:${activeSessionId}:${contactId}`;
+    if (requestedProfilePictures.current.has(cacheKey)) return;
+    requestedProfilePictures.current.add(cacheKey);
+    try {
+      const result = await whatsappApi.getProfilePicture(rawJid, { sessionId: activeSessionId, contactId });
+      const profilePictureUrl = String(result?.profilePictureUrl || '').trim();
+      if (!profilePictureUrl) return;
+      setConversations(current => current.map(item => {
+        if (item.id !== conversation.id) return item;
+        return item.isGroup
+          ? { ...item, groupPhotoUrl: profilePictureUrl }
+          : { ...item, lead: { ...item.lead, profilePictureUrl } as Lead };
+      }));
+    } catch {
+      // Ausência ou privacidade da foto mantém as iniciais sem interromper o atendimento.
+    }
+  }, [activeSessionId, user.id]);
+
   useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
 
   useEffect(() => {
-    conversations.slice(0, 30).forEach(conversation => {
-      if (getConversationAvatar(conversation)) return;
-      const rawJid = String(conversation.remoteJid || conversation.lead?.whatsappJid || conversation.lead?.profilePictureJid || conversation.phone || '');
-      if (!rawJid || requestedProfilePictures.current.has(rawJid)) return;
-      requestedProfilePictures.current.add(rawJid);
-      void whatsappApi.getProfilePicture(rawJid).catch(() => undefined);
-    });
-  }, [conversations]);
+    conversations.slice(0, 50).forEach(conversation => void requestConversationAvatar(conversation));
+  }, [conversations, requestConversationAvatar]);
 
   const unlockAudio = useCallback(async () => {
     try {
@@ -303,12 +324,8 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
   );
 
   useEffect(() => {
-    if (!selectedConversation || getConversationAvatar(selectedConversation)) return;
-    const rawJid = String(selectedConversation.remoteJid || selectedConversation.lead?.whatsappJid || selectedConversation.lead?.profilePictureJid || selectedConversation.phone || '');
-    if (!rawJid || requestedProfilePictures.current.has(rawJid)) return;
-    requestedProfilePictures.current.add(rawJid);
-    void whatsappApi.getProfilePicture(rawJid).catch(() => undefined);
-  }, [selectedConversation]);
+    if (selectedConversation) void requestConversationAvatar(selectedConversation);
+  }, [selectedConversation, requestConversationAvatar]);
   
   // Keep track of the selected lead phone explicitly
   const selectedPhoneRef = useRef<string | null>(null);

@@ -102,10 +102,7 @@ export default function ContactAvatarUploader({
             draggable={false}
             loading="lazy"
             referrerPolicy="no-referrer"
-            onError={() => {
-              console.error('[Avatar Frontend] erro ao carregar:', photoURL);
-              setImageFailed(true);
-            }}
+            onError={() => setImageFailed(true)}
           />
         ) : (
           <span className="avatar-initial font-black select-none">{initials}</span>

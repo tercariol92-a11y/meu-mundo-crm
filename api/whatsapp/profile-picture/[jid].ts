@@ -33,6 +33,10 @@ export default async function handler(req: RequestLike, res: ResponseLike) {
     const target = new URL(`/api/whatsapp/profile-picture/${encodeURIComponent(rawJid)}`, baseUrl.toString());
     const refresh = Array.isArray(req.query?.refresh) ? req.query?.refresh[0] : req.query?.refresh;
     if (refresh === 'true') target.searchParams.set('refresh', 'true');
+    const sessionId = Array.isArray(req.query?.sessionId) ? req.query?.sessionId[0] : req.query?.sessionId;
+    const contactId = Array.isArray(req.query?.contactId) ? req.query?.contactId[0] : req.query?.contactId;
+    if (sessionId) target.searchParams.set('sessionId', sessionId);
+    if (contactId) target.searchParams.set('contactId', contactId);
     const upstream = await fetch(target, { headers: { Authorization: authorization, 'X-Internal-Secret': internalSecret, Accept: 'application/json' } });
     const raw = await upstream.text();
     try { return json(upstream.status, JSON.parse(raw)); }

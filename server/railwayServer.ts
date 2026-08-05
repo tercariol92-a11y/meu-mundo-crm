@@ -213,7 +213,7 @@ app.post('/api/whatsapp/send-media', (req, res, next) => {
 
 app.get('/api/whatsapp/profile-picture/:jid', async (req,res,next) => {
   try {
-    const url=await getSessionProfilePicture(uidOf(req),req.params.jid,req.query.refresh==='true');
+    const url=await getSessionProfilePicture(uidOf(req),req.params.jid,req.query.refresh==='true',String(req.query.sessionId||''),String(req.query.contactId||''));
     res.json({success:true,profilePictureUrl:url});
   } catch(error) {
     const code=error instanceof Error?error.message:'';
