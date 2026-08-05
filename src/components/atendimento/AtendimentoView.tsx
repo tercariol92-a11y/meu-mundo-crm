@@ -164,15 +164,20 @@ function renderLinkedText(text: string) {
 function IncomingImage({ message }: { message: ChatMessage }) {
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  const legacyMessage = message as ChatMessage & { messageId?: string; imageUrl?: string; fileUrl?: string; url?: string };
+  const mediaUrl = message.mediaUrl || legacyMessage.imageUrl || legacyMessage.fileUrl || legacyMessage.url || null;
+  useEffect(() => {
+    console.log('[IMAGE RENDER]', { messageId: legacyMessage.messageId || message.id, type: message.type, mediaUrl, thumbnailUrl: message.thumbnailUrl || '' });
+  }, [legacyMessage.messageId, message.id, message.type, mediaUrl, message.thumbnailUrl]);
   if (message.mediaStatus === 'processing') return <div className="p-3 text-xs text-[#667781]">Processando imagem...</div>;
-  if (message.mediaStatus === 'error' || failed || !message.mediaUrl) {
+  if (message.mediaStatus === 'error' || failed || !mediaUrl) {
     return <div className="p-3 text-xs text-[#667781] flex items-center gap-2"><AlertCircle size={16} />Não foi possível carregar esta imagem.</div>;
   }
   return (
-    <a href={message.mediaUrl} target="_blank" rel="noopener noreferrer" className="block relative bg-[#f0f2f5] min-h-24">
+    <a href={mediaUrl} target="_blank" rel="noopener noreferrer" className="block relative bg-[#f0f2f5] min-h-24">
       {loading && <div className="absolute inset-0 flex items-center justify-center text-xs text-[#667781]">Carregando imagem...</div>}
       <img
-        src={message.thumbnailUrl || message.mediaUrl}
+        src={message.thumbnailUrl || mediaUrl}
         alt={message.caption || message.fileName || 'Imagem recebida'}
         className={`w-full max-w-[360px] max-h-[420px] object-contain transition-opacity ${loading ? 'opacity-0' : 'opacity-100'}`}
         onLoad={() => setLoading(false)}

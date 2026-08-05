@@ -15,31 +15,16 @@ const sessions = new Map<string,WhatsAppSession>();
 const logger = pino({level:'silent'});
 let db:any=null;
 const ROOT=path.resolve(process.env.BAILEYS_AUTH_ROOT||path.join(process.cwd(),'auth_info_baileys'));
-const MEDIA_ROOT=path.resolve(process.env.WHATSAPP_MEDIA_ROOT||path.join(path.dirname(ROOT),'whatsapp_media'));
 const safeUid=(uid:string)=>{if(!/^[A-Za-z0-9_-]{6,128}$/.test(uid))throw new Error('UID inválido.');return uid};
 const groupDocId=(uid:string,jid:string)=>`${uid}_${jid.replace(/@g\.us$/,'').replace(/[^A-Za-z0-9_-]/g,'_')}`;
 const phoneOf=(jid:string)=>jid.split('@')[0].split(':')[0].replace(/\D/g,'');
 async function persistPublicFile(buffer:Buffer,storagePath:string,contentType:string,metadata:Record<string,string>){
-  try {
-    const bucket=getStorage().bucket();
-    const token=randomUUID();
-    await bucket.file(storagePath).save(buffer,{resumable:false,metadata:{contentType,cacheControl:'public,max-age=86400',metadata:{firebaseStorageDownloadTokens:token,...metadata}}});
-    return `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(token)}`;
-  } catch(error) {
-    const reason=error instanceof Error?error.message:'erro desconhecido';
-    console.warn(`[WhatsApp Media] Firebase Storage indisponível; usando volume persistente: ${reason}`);
-    const segments=storagePath.split('/').map(value=>value.replace(/[^A-Za-z0-9._-]/g,'_')).filter(Boolean);
-    const originalName=segments.pop()||'arquivo.bin';
-    const relativePath=[...segments,`${randomUUID()}-${originalName}`].join('/');
-    const diskPath=path.join(MEDIA_ROOT,...relativePath.split('/'));
-    await fs.promises.mkdir(path.dirname(diskPath),{recursive:true});
-    await fs.promises.writeFile(diskPath,buffer);
-    const configured=String(process.env.WHATSAPP_PUBLIC_URL||'').trim();
-    const railwayDomain=String(process.env.RAILWAY_PUBLIC_DOMAIN||'').trim();
-    const publicBase=(configured||(railwayDomain?`https://${railwayDomain}`:'')).replace(/\/$/,'');
-    if(!publicBase)throw new Error('URL pública da Railway não configurada para servir mídia.');
-    return `${publicBase}/whatsapp-media/${relativePath.split('/').map(encodeURIComponent).join('/')}`;
-  }
+  const bucket=getStorage().bucket();
+  const token=randomUUID();
+  await bucket.file(storagePath).save(buffer,{resumable:false,metadata:{contentType,cacheControl:'public,max-age=31536000,immutable',metadata:{firebaseStorageDownloadTokens:token,...metadata}}});
+  const mediaUrl=`https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(token)}`;
+  console.log('[IMAGE STORAGE]',{storagePath,mediaUrl,uploadSuccess:true});
+  return {mediaUrl,storagePath};
 }
 export function validateWhatsAppPhone(rawPhone: unknown): { valid: true; phone: string } | { valid: false; error: string } {
   if (typeof rawPhone !== 'string' && typeof rawPhone !== 'number') return { valid: false, error: 'Informe um número de destino completo.' };
@@ -71,11 +56,12 @@ async function saveMedia(s: WhatsAppSession, msg: any, scope: string, id: string
     const fileName = receivedName.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 160) || `${defaultBaseName}.${extension}`;
     const storagePath = `whatsapp-media/${s.userId}/${scope}/${id}/${fileName}`;
     console.log(`[WhatsApp Media] mídia baixada; messageId=${id}; bytes=${buffer.length}`);
-    const mediaUrl=await persistPublicFile(buffer,storagePath,mimetype,{fileName,telefone:scope,messageId:id,origem:'WhatsApp QR Code',ownerUserId:s.userId});
+    const stored=await persistPublicFile(buffer,storagePath,mimetype,{fileName,telefone:scope,messageId:id,origem:'WhatsApp QR Code',ownerUserId:s.userId});
     console.log(`[WhatsApp Media] upload concluído; messageId=${id}; path=${storagePath}`);
     return {
-      mediaUrl,
-      thumbnailUrl: leaf.imageMessage ? mediaUrl : '',
+      mediaUrl:stored.mediaUrl,
+      thumbnailUrl: leaf.imageMessage ? stored.mediaUrl : '',
+      storagePath:stored.storagePath,
       mimetype,
       fileName,
       fileSize: Number(media.fileLength || buffer.length),
@@ -116,7 +102,8 @@ async function refreshContactAvatar(s: WhatsAppSession, msg: any, phone: string,
       const buffer = Buffer.from(await response.arrayBuffer());
       const contentType = response.headers.get('content-type') || 'image/jpeg';
       const storagePath = `whatsapp-profile-pictures/${s.userId}/${phone}/avatar.jpg`;
-      const permanentUrl=await persistPublicFile(buffer,storagePath,contentType,{telefone:phone,origem:'WhatsApp QR Code',ownerUserId:s.userId});
+      const stored=await persistPublicFile(buffer,storagePath,contentType,{telefone:phone,origem:'WhatsApp QR Code',ownerUserId:s.userId});
+      const permanentUrl=stored.mediaUrl;
       console.log(`[WhatsApp Avatar] foto salva; JID=${jid}; telefone=${phone}`);
       return {
         profilePictureUrl: permanentUrl,
@@ -260,5 +247,57 @@ export function getWhatsAppStatus(uid:string){const s=sessions.get(safeUid(uid))
 export function listWhatsAppSessions(){return[...sessions.values()].map(s=>({userId:s.userId,...getWhatsAppStatus(s.userId)}))}
 export async function initializeExistingSessions(){if(!fs.existsSync(ROOT))return;for(const e of await fs.promises.readdir(ROOT,{withFileTypes:true}))if(e.isDirectory()&&/^[A-Za-z0-9_-]{6,128}$/.test(e.name))void connectWhatsApp(e.name)}
 export async function sendSessionMessage(uid:string,destination:string,text:string){const s=getWhatsAppSession(uid);if(!s?.socket||s.status!=='connected')throw new Error('Sessão WhatsApp do usuário desconectada.');const jid=destination.endsWith('@g.us')?destination:`${destination.replace(/\D/g,'')}@s.whatsapp.net`;const sent=await s.socket.sendMessage(jid,{text});return{success:true,messageId:sent?.key.id,jid,remoteJid:jid,messages:[{id:sent?.key.id}]}}
-export async function sendSessionMedia(uid:string,destination:string,buffer:Buffer,mimetype:string,fileName:string,caption=''){const s=getWhatsAppSession(uid);if(!s?.socket||s.status!=='connected')throw new Error('Sessão WhatsApp do usuário desconectada.');const jid=destination.endsWith('@g.us')?destination:`${destination.replace(/\D/g,'')}@s.whatsapp.net`;const type=mimetype.startsWith('image/')?'image':mimetype.startsWith('video/')?'video':mimetype.startsWith('audio/')?'audio':'document';const content:any=type==='image'?{image:buffer,caption,mimetype}:type==='video'?{video:buffer,caption,mimetype}:type==='audio'?{audio:buffer,mimetype,ptt:false}:{document:buffer,mimetype,fileName,caption};const sent=await s.socket.sendMessage(jid,content);return{success:true,messageId:sent?.key.id,jid,remoteJid:jid,type,fileName,mimetype,fileSize:buffer.length,mediaStatus:'ready',mediaUrl:'',caption}}
+export async function sendSessionMedia(uid:string,destination:string,buffer:Buffer,mimetype:string,fileName:string,caption='',context:Record<string,string>={}){
+  const s=getWhatsAppSession(uid);
+  if(!s?.socket||s.status!=='connected')throw new Error('Sessão WhatsApp do usuário desconectada.');
+  const isGroup=destination.endsWith('@g.us');
+  const phone=destination.replace(/\D/g,'');
+  const chatId=isGroup?destination:`${phone}@s.whatsapp.net`;
+  const type=mimetype.startsWith('image/')?'image':mimetype.startsWith('video/')?'video':mimetype.startsWith('audio/')?'audio':'document';
+  const safeFileName=String(fileName||`${type}.bin`).replace(/[^A-Za-z0-9._-]/g,'_').slice(0,160);
+  console.log('[IMAGE SEND START]',{uid,chatId,fileName:safeFileName,mimeType:mimetype,fileSize:buffer.length,caption});
+  const content:any=type==='image'?{image:buffer,caption,mimetype}:type==='video'?{video:buffer,caption,mimetype}:type==='audio'?{audio:buffer,mimetype,ptt:false}:{document:buffer,mimetype,fileName:safeFileName,caption};
+  const sent=await s.socket.sendMessage(chatId,content);
+  const messageId=String(sent?.key.id||'');
+  if(!messageId)throw new Error('O WhatsApp não confirmou o messageId da mídia.');
+  console.log('[IMAGE SENT TO WHATSAPP]',{messageId,chatId,status:'sent'});
+
+  const storagePath=`whatsapp-media/${uid}/${chatId}/${messageId}/${safeFileName}`;
+  const stored=await persistPublicFile(buffer,storagePath,mimetype,{fileName:safeFileName,chatId,messageId,origem:'WhatsApp QR Code',ownerUserId:uid});
+  const timestamp=FieldValue.serverTimestamp();
+  const collectionName=isGroup?'whatsapp_groups':'leads';
+  let parentRef:any=null;
+  if(isGroup){
+    const groupId=context.groupId||groupDocId(uid,chatId);
+    parentRef=db.collection(collectionName).doc(groupId);
+  }else{
+    const hintedId=String(context.leadId||'').trim();
+    if(hintedId){
+      const hinted=await db.collection(collectionName).doc(hintedId).get();
+      const hintedData=hinted.exists?hinted.data():null;
+      if(hintedData&&(!hintedData.whatsappOwnerUserId||hintedData.whatsappOwnerUserId===uid))parentRef=hinted.ref;
+    }
+    if(!parentRef){
+      const match=await db.collection(collectionName).where('whatsappOwnerUserId','==',uid).where('telefone','==',phone).limit(1).get();
+      parentRef=match.empty?db.collection(collectionName).doc():match.docs[0].ref;
+    }
+  }
+  const messageRef=parentRef.collection('messages').doc(messageId);
+  const messageDocument={
+    messageId,metaMessageId:messageId,chatId,contactId:parentRef.id,sessionUid:uid,
+    telefone:phone,phone,direction:'out',messageDirection:'outgoing',fromMe:true,type,
+    text:caption,body:caption,mensagem:caption,caption,mimetype,mimeType:mimetype,fileName:safeFileName,
+    fileSize:buffer.length,mediaUrl:stored.mediaUrl,thumbnailUrl:type==='image'?stored.mediaUrl:'',storagePath:stored.storagePath,
+    mediaStatus:'ready',status:'sent',senderId:context.attendantId||uid,attendantId:context.attendantId||uid,
+    attendantName:context.attendantName||'',attendantEmail:context.attendantEmail||'',
+    ownerUserId:uid,whatsappOwnerUserId:uid,whatsappSessionId:uid,conversationId:context.conversationId||parentRef.id,
+    timestamp,createdAt:timestamp
+  };
+  const batch=db.batch();
+  batch.set(messageRef,messageDocument,{merge:true});
+  batch.set(parentRef,{lastMessage:caption||`[${type}] ${safeFileName}`,ultimaMensagem:caption||`[${type}] ${safeFileName}`,lastMessageId:messageId,lastMessageAt:timestamp,updatedAt:timestamp},{merge:true});
+  await batch.commit();
+  console.log('[IMAGE FIRESTORE SAVE]',{documentId:messageRef.id,messageId,type,mediaUrl:stored.mediaUrl});
+  return{success:true,messageId,chatId,jid:chatId,remoteJid:chatId,canonicalPhone:phone,type,caption,mimeType:mimetype,mimetype,fileName:safeFileName,fileSize:buffer.length,mediaUrl:stored.mediaUrl,thumbnailUrl:type==='image'?stored.mediaUrl:'',storagePath:stored.storagePath,timestamp:Date.now(),status:'sent',mediaStatus:'ready',mediaError:''};
+}
 export async function getSessionProfilePicture(uid:string,jid:string){const s=getWhatsAppSession(uid);if(!s?.socket||s.status!=='connected')throw new Error('Sessão WhatsApp do usuário desconectada.');const cleanJid=String(jid||'').trim();if(!cleanJid||cleanJid.includes('newsletter')||cleanJid==='status@broadcast'||cleanJid.endsWith('@g.us'))throw new Error('JID de contato inválido.');return await s.socket.profilePictureUrl(cleanJid,'image')}
