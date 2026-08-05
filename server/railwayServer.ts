@@ -28,9 +28,11 @@ if (!firebaseApp) {
   const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
   const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n').trim();
+  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET?.trim()
+    || (projectId ? `${projectId}.firebasestorage.app` : undefined);
   firebaseApp = initializeApp(projectId && clientEmail && privateKey
-    ? { credential: cert({ projectId, clientEmail, privateKey }), projectId }
-    : projectId ? { projectId } : undefined);
+    ? { credential: cert({ projectId, clientEmail, privateKey }), projectId, storageBucket }
+    : projectId ? { projectId, storageBucket } : undefined);
 }
 
 const firebaseDatabaseId = process.env.FIREBASE_DATABASE_ID?.trim();
