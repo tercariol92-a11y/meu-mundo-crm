@@ -1,4 +1,5 @@
 import express from 'express';
+import path from 'path';
 import Busboy from '@fastify/busboy';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
@@ -40,6 +41,7 @@ const db = firebaseDatabaseId ? getFirestore(firebaseApp, firebaseDatabaseId) : 
 initWhatsAppSessions(db);
 const app = express();
 const operationLocks = new Map<string, Promise<unknown>>();
+const mediaRoot = path.resolve(process.env.WHATSAPP_MEDIA_ROOT || path.join(path.dirname(process.env.BAILEYS_AUTH_ROOT || './auth_info_baileys'), 'whatsapp_media'));
 
 app.use((req, res, next) => {
   const origin = String(req.headers.origin || '');
@@ -62,6 +64,7 @@ app.get('/health', (_req, res) => res.status(200).json({
   status: 'online',
   timestamp: new Date().toISOString()
 }));
+app.use('/whatsapp-media', express.static(mediaRoot, { index: false, fallthrough: false, maxAge: '1d' }));
 
 type Principal = { uid: string; isAdmin: boolean };
 declare global { namespace Express { interface Request { whatsappPrincipal?: Principal } } }
@@ -112,7 +115,7 @@ app.post('/api/whatsapp/send-media', (req, res, next) => {
   const fields:Record<string,string>={};let fileBuffer=Buffer.alloc(0);let mimetype='application/octet-stream';let fileName='arquivo';
   const busboy=new Busboy({headers:req.headers,limits:{fileSize:20*1024*1024,files:1}});
   busboy.on('field',(name,value)=>{fields[name]=value});
-  busboy.on('file',(_name,stream,info)=>{mimetype=info.mimeType||mimetype;fileName=info.filename||fileName;const chunks:Buffer[]=[];stream.on('data',chunk=>chunks.push(Buffer.from(chunk)));stream.on('end',()=>{fileBuffer=Buffer.concat(chunks)})});
+  busboy.on('file',(_name,stream,filename,_encoding,mimeType)=>{mimetype=mimeType||mimetype;fileName=filename||fileName;const chunks:Buffer[]=[];stream.on('data',chunk=>chunks.push(Buffer.from(chunk)));stream.on('end',()=>{fileBuffer=Buffer.concat(chunks)})});
   busboy.on('finish',async()=>{try{if(!fields.to||!fileBuffer.length)return res.status(400).json({success:false,error:'Destino e arquivo são obrigatórios.'});res.json(await sendSessionMedia(uidOf(req),fields.to,fileBuffer,mimetype,fields.fileName||fileName,fields.caption||''));}catch(error){next(error)}});
   busboy.on('error',next);req.pipe(busboy);
 });

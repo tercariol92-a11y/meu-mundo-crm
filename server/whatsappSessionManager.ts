@@ -15,9 +15,32 @@ const sessions = new Map<string,WhatsAppSession>();
 const logger = pino({level:'silent'});
 let db:any=null;
 const ROOT=path.resolve(process.env.BAILEYS_AUTH_ROOT||path.join(process.cwd(),'auth_info_baileys'));
+const MEDIA_ROOT=path.resolve(process.env.WHATSAPP_MEDIA_ROOT||path.join(path.dirname(ROOT),'whatsapp_media'));
 const safeUid=(uid:string)=>{if(!/^[A-Za-z0-9_-]{6,128}$/.test(uid))throw new Error('UID inválido.');return uid};
 const groupDocId=(uid:string,jid:string)=>`${uid}_${jid.replace(/@g\.us$/,'').replace(/[^A-Za-z0-9_-]/g,'_')}`;
 const phoneOf=(jid:string)=>jid.split('@')[0].split(':')[0].replace(/\D/g,'');
+async function persistPublicFile(buffer:Buffer,storagePath:string,contentType:string,metadata:Record<string,string>){
+  try {
+    const bucket=getStorage().bucket();
+    const token=randomUUID();
+    await bucket.file(storagePath).save(buffer,{resumable:false,metadata:{contentType,cacheControl:'public,max-age=86400',metadata:{firebaseStorageDownloadTokens:token,...metadata}}});
+    return `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(token)}`;
+  } catch(error) {
+    const reason=error instanceof Error?error.message:'erro desconhecido';
+    console.warn(`[WhatsApp Media] Firebase Storage indisponível; usando volume persistente: ${reason}`);
+    const segments=storagePath.split('/').map(value=>value.replace(/[^A-Za-z0-9._-]/g,'_')).filter(Boolean);
+    const originalName=segments.pop()||'arquivo.bin';
+    const relativePath=[...segments,`${randomUUID()}-${originalName}`].join('/');
+    const diskPath=path.join(MEDIA_ROOT,...relativePath.split('/'));
+    await fs.promises.mkdir(path.dirname(diskPath),{recursive:true});
+    await fs.promises.writeFile(diskPath,buffer);
+    const configured=String(process.env.WHATSAPP_PUBLIC_URL||'').trim();
+    const railwayDomain=String(process.env.RAILWAY_PUBLIC_DOMAIN||'').trim();
+    const publicBase=(configured||(railwayDomain?`https://${railwayDomain}`:'')).replace(/\/$/,'');
+    if(!publicBase)throw new Error('URL pública da Railway não configurada para servir mídia.');
+    return `${publicBase}/whatsapp-media/${relativePath.split('/').map(encodeURIComponent).join('/')}`;
+  }
+}
 export function validateWhatsAppPhone(rawPhone: unknown): { valid: true; phone: string } | { valid: false; error: string } {
   if (typeof rawPhone !== 'string' && typeof rawPhone !== 'number') return { valid: false, error: 'Informe um número de destino completo.' };
   const phone = String(rawPhone).replace(/\D/g, '');
@@ -47,26 +70,8 @@ async function saveMedia(s: WhatsAppSession, msg: any, scope: string, id: string
     const receivedName = String(leaf.documentMessage?.fileName || `${defaultBaseName}.${extension}`);
     const fileName = receivedName.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 160) || `${defaultBaseName}.${extension}`;
     const storagePath = `whatsapp-media/${s.userId}/${scope}/${id}/${fileName}`;
-    const bucket = getStorage().bucket();
-    const token = randomUUID();
-
     console.log(`[WhatsApp Media] mídia baixada; messageId=${id}; bytes=${buffer.length}`);
-    await bucket.file(storagePath).save(buffer, {
-      resumable: false,
-      metadata: {
-        contentType: mimetype,
-        metadata: {
-          firebaseStorageDownloadTokens: token,
-          fileName,
-          telefone: scope,
-          messageId: id,
-          origem: 'WhatsApp QR Code',
-          ownerUserId: s.userId
-        }
-      }
-    });
-
-    const mediaUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(token)}`;
+    const mediaUrl=await persistPublicFile(buffer,storagePath,mimetype,{fileName,telefone:scope,messageId:id,origem:'WhatsApp QR Code',ownerUserId:s.userId});
     console.log(`[WhatsApp Media] upload concluído; messageId=${id}; path=${storagePath}`);
     return {
       mediaUrl,
@@ -111,17 +116,7 @@ async function refreshContactAvatar(s: WhatsAppSession, msg: any, phone: string,
       const buffer = Buffer.from(await response.arrayBuffer());
       const contentType = response.headers.get('content-type') || 'image/jpeg';
       const storagePath = `whatsapp-profile-pictures/${s.userId}/${phone}/avatar.jpg`;
-      const bucket = getStorage().bucket();
-      const token = randomUUID();
-      await bucket.file(storagePath).save(buffer, {
-        resumable: false,
-        metadata: {
-          contentType,
-          cacheControl: 'public,max-age=86400',
-          metadata: { firebaseStorageDownloadTokens: token, telefone: phone, origem: 'WhatsApp QR Code', ownerUserId: s.userId }
-        }
-      });
-      const permanentUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(token)}`;
+      const permanentUrl=await persistPublicFile(buffer,storagePath,contentType,{telefone:phone,origem:'WhatsApp QR Code',ownerUserId:s.userId});
       console.log(`[WhatsApp Avatar] foto salva; JID=${jid}; telefone=${phone}`);
       return {
         profilePictureUrl: permanentUrl,
