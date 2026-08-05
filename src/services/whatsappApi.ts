@@ -106,7 +106,7 @@ export const whatsappApi = {
   },
 
   resolveMediaUrl(message: any): string | null {
-    const value = String(message?.mediaUrl || message?.imageUrl || message?.fileUrl || message?.url || '').trim();
+    const value = String(message?.mediaUrl || message?.imageUrl || message?.fileUrl || message?.downloadUrl || message?.url || '').trim();
     if (!value) return null;
     if (/^\/api\/whatsapp\/(?:session-)?media\//i.test(value)) return null;
     if (!/^https:\/\//i.test(value) && !value.startsWith('data:')) return null;

@@ -168,7 +168,7 @@ function IncomingImage({ message }: { message: ChatMessage }) {
   const legacyMessage = message as ChatMessage & { messageId?: string; imageUrl?: string; fileUrl?: string; url?: string };
   const mediaUrl = whatsappApi.resolveMediaUrl(legacyMessage);
   useEffect(() => {
-    console.log('[IMAGE RENDER]', { messageId: legacyMessage.messageId || message.id, type: message.type, mediaUrl, thumbnailUrl: message.thumbnailUrl || '' });
+    console.log('[MEDIA RENDER]', { messageId: legacyMessage.messageId || message.id, type: message.type, mediaUrl, thumbnailUrl: message.thumbnailUrl || '' });
   }, [legacyMessage.messageId, message.id, message.type, mediaUrl, message.thumbnailUrl]);
   if (message.mediaStatus === 'processing') return <div className="p-3 text-xs text-[#667781]">Processando imagem...</div>;
   if (message.mediaStatus === 'error' || failed || !mediaUrl) {
@@ -1394,8 +1394,9 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                 const visibleContent = msg.type === 'image'
                   ? (msg.caption || (/^\[Foto recebida\]$/.test(content) ? '' : content.replace(/^\[Foto\]\s*/, '')))
                   : content;
+                const resolvedMediaUrl = whatsappApi.resolveMediaUrl(msg);
 
-                if (!content && !msg.mediaUrl && !['image', 'video', 'audio', 'document', 'sticker', 'location'].includes(msg.type)) return null;
+                if (!content && !resolvedMediaUrl && !['image', 'video', 'audio', 'document', 'sticker', 'location'].includes(msg.type)) return null;
                 
                 const msgDateStr = msg.timestamp ? safeFormatTime(msg.timestamp, 'yyyy-MM-dd') : '';
                 const prevMsgDateStr = (idx > 0 && messages[idx - 1].timestamp) ? safeFormatTime(messages[idx - 1].timestamp, 'yyyy-MM-dd') : '';
@@ -1463,14 +1464,14 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                                 </div>
                               </div>
                             </div>
-                          ) : msg.mediaUrl ? (
+                          ) : resolvedMediaUrl ? (
                             <div className="mb-2 rounded-xl overflow-hidden border border-[#e9edef] bg-[#f8f9fa] max-w-[300px]">
                               {msg.type === 'image' ? (
                                 <IncomingImage message={msg} />
                               ) : msg.type === 'video' ? (
-                                <video src={msg.mediaUrl} controls className="w-full h-auto max-h-60" />
+                                <video src={resolvedMediaUrl} controls className="w-full h-auto max-h-60" />
                               ) : msg.type === 'audio' ? (
-                                <audio src={msg.mediaUrl} controls className="w-full" />
+                                <audio src={resolvedMediaUrl} controls className="w-full" />
                               ) : (
                                 <div className="p-3 flex items-center gap-3">
                                   <div className="w-10 h-10 rounded-lg bg-white flex items-center justify-center text-primary shadow-sm">
@@ -1479,7 +1480,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                                   <div className="min-w-0 flex-1">
                                     <p className="text-xs font-bold truncate">{msg.mediaName || msg.fileName || 'Documento'}</p>
                                     <p className="text-[9px] text-[#667781]">{msg.mimetype || msg.mediaType || ''}{(msg.fileSize || msg.mediaSize) ? ` • ${((msg.fileSize || msg.mediaSize || 0) / 1024).toFixed(1)} KB` : ''}</p>
-                                    <a href={msg.mediaUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary font-bold uppercase hover:underline">Abrir / baixar</a>
+                                    <a href={resolvedMediaUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] text-primary font-bold uppercase hover:underline">Abrir / baixar</a>
                                   </div>
                                 </div>
                               )}

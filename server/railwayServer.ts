@@ -3,6 +3,7 @@ import Busboy from '@fastify/busboy';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getStorage } from 'firebase-admin/storage';
 import {
   connectWhatsApp,
   disconnectWhatsApp,
@@ -24,20 +25,20 @@ const allowedOrigins = new Set([
 ]);
 
 let firebaseApp = getApps()[0];
+const configuredStorageBucket = process.env.FIREBASE_STORAGE_BUCKET?.trim();
 if (!firebaseApp) {
   const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
   const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n').trim();
-  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET?.trim()
-    || (projectId ? `${projectId}.firebasestorage.app` : undefined);
   firebaseApp = initializeApp(projectId && clientEmail && privateKey
-    ? { credential: cert({ projectId, clientEmail, privateKey }), projectId, storageBucket }
-    : projectId ? { projectId, storageBucket } : undefined);
+    ? { credential: cert({ projectId, clientEmail, privateKey }), projectId, storageBucket: configuredStorageBucket }
+    : projectId ? { projectId, storageBucket: configuredStorageBucket } : undefined);
 }
 
 const firebaseDatabaseId = process.env.FIREBASE_DATABASE_ID?.trim();
 const db = firebaseDatabaseId ? getFirestore(firebaseApp, firebaseDatabaseId) : getFirestore(firebaseApp);
-initWhatsAppSessions(db);
+const mediaBucket = configuredStorageBucket ? getStorage(firebaseApp).bucket(configuredStorageBucket) : null;
+initWhatsAppSessions(db, mediaBucket);
 const app = express();
 const operationLocks = new Map<string, Promise<unknown>>();
 
@@ -60,7 +61,8 @@ app.get('/health', (_req, res) => res.status(200).json({
   success: true,
   service: 'meu-mundo-whatsapp',
   status: 'online',
-  timestamp: new Date().toISOString()
+  timestamp: new Date().toISOString(),
+  storageConfigured: Boolean(configuredStorageBucket)
 }));
 
 type Principal = { uid: string; isAdmin: boolean };
@@ -122,4 +124,20 @@ app.get('/api/whatsapp/profile-picture/:jid', async (req,res,next) => { try { co
 app.use('/api', (req,res) => res.status(404).json({success:false,error:`Endpoint ${req.method} ${req.path} não encontrado.`}));
 app.use((error:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{console.error('[Railway WhatsApp] erro:',error instanceof Error?error.message:'erro desconhecido');res.status(500).json({success:false,error:error instanceof Error?error.message:'Falha interna no serviço WhatsApp.'})});
 
-app.listen(PORT,'0.0.0.0',()=>console.log(`[Railway WhatsApp] serviço online na porta ${PORT}; authRoot=${process.env.BAILEYS_AUTH_ROOT||'./auth_info_baileys'}`));
+async function start() {
+  const projectId = firebaseApp.options.projectId || '';
+  if (!configuredStorageBucket || !mediaBucket) {
+    console.error('[FIREBASE STORAGE CONFIG]', { projectId, bucketName: '', bucketExists: false });
+    console.error('FIREBASE_STORAGE_BUCKET_NOT_CONFIGURED');
+  } else {
+    const [bucketExists] = await mediaBucket.exists();
+    console.log('[FIREBASE STORAGE CONFIG]', { projectId, bucketName: mediaBucket.name, bucketExists });
+    if (!bucketExists) console.error('FIREBASE_STORAGE_BUCKET_NOT_FOUND');
+  }
+  app.listen(PORT,'0.0.0.0',()=>console.log(`[Railway WhatsApp] serviço online na porta ${PORT}; authRoot=${process.env.BAILEYS_AUTH_ROOT||'./auth_info_baileys'}`));
+}
+
+void start().catch(error => {
+  console.error('[Railway WhatsApp] falha ao validar inicialização:', error instanceof Error ? error.message : 'erro desconhecido');
+  process.exitCode = 1;
+});
