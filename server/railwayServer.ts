@@ -38,6 +38,7 @@ if (!firebaseApp) {
 const firebaseDatabaseId = process.env.FIREBASE_DATABASE_ID?.trim();
 const db = firebaseDatabaseId ? getFirestore(firebaseApp, firebaseDatabaseId) : getFirestore(firebaseApp);
 const mediaBucket = configuredStorageBucket ? getStorage(firebaseApp).bucket(configuredStorageBucket) : null;
+let storageAvailable = false;
 initWhatsAppSessions(db, mediaBucket);
 const app = express();
 const operationLocks = new Map<string, Promise<unknown>>();
@@ -62,7 +63,8 @@ app.get('/health', (_req, res) => res.status(200).json({
   service: 'meu-mundo-whatsapp',
   status: 'online',
   timestamp: new Date().toISOString(),
-  storageConfigured: Boolean(configuredStorageBucket)
+  storageConfigured: Boolean(configuredStorageBucket),
+  storageAvailable
 }));
 
 type Principal = { uid: string; isAdmin: boolean };
@@ -131,6 +133,7 @@ async function start() {
     console.error('FIREBASE_STORAGE_BUCKET_NOT_CONFIGURED');
   } else {
     const [bucketExists] = await mediaBucket.exists();
+    storageAvailable = bucketExists;
     console.log('[FIREBASE STORAGE CONFIG]', { projectId, bucketName: mediaBucket.name, bucketExists });
     if (!bucketExists) console.error('FIREBASE_STORAGE_BUCKET_NOT_FOUND');
   }
