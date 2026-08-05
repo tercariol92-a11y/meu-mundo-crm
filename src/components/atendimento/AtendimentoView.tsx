@@ -65,6 +65,11 @@ function getConversationAvatar(conversation?: Conversation | null) {
   return conversation?.groupPhotoUrl || getAvatarUrl(conversation?.lead);
 }
 
+function withAvatarCacheVersion(url: string) {
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}avatarVersion=${Date.now()}`;
+}
+
 // Robust helper to parse any date format safely (ISO string, Timestamp, Date, Unix number) without breaking the UI
 export function safeDate(value: any): Date | null {
   if (!value) return null;
@@ -230,8 +235,11 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
     requestedProfilePictures.current.add(cacheKey);
     try {
       const result = await whatsappApi.getProfilePicture(rawJid, { refresh, sessionId: activeSessionId, contactId });
-      const profilePictureUrl = String(result?.profilePictureUrl || '').trim();
-      if (!profilePictureUrl) return;
+      const storedProfilePictureUrl = String(result?.profilePictureUrl || '').trim();
+      if (!storedProfilePictureUrl) return;
+      // The permanent Storage path may remain identical after its contents are renewed.
+      // A view-only version parameter resets the failed <img> state without changing Firestore.
+      const profilePictureUrl = refresh ? withAvatarCacheVersion(storedProfilePictureUrl) : storedProfilePictureUrl;
       setConversations(current => current.map(item => {
         if (item.id !== conversation.id) return item;
         return item.isGroup
