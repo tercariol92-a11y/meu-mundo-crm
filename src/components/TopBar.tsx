@@ -2,6 +2,7 @@ import { Bell, Search, User as UserIcon } from 'lucide-react';
 import { User } from '../types';
 import { useEffect, useState } from 'react';
 import { databaseService } from '../services/databaseService';
+import { whatsappApi } from '../services/whatsappApi';
 
 interface TopBarProps {
   user: User;
@@ -10,9 +11,16 @@ interface TopBarProps {
 export default function TopBar({ user }: TopBarProps) {
   const [whatsappUnread, setWhatsappUnread] = useState(0);
 
-  useEffect(() => databaseService.onConversationsChange((conversations) => {
-    setWhatsappUnread(conversations.reduce((total, conversation) => total + (conversation.unreadCount || 0), 0));
-  }), []);
+  useEffect(() => {
+    let unsubscribe=()=>{};let cancelled=false;
+    void whatsappApi.getStatus().then(result=>{
+      if(cancelled)return;
+      const sessionId=result?.status?.status==='connected'?String(result.status.sessionId||''):'';
+      if(!sessionId){setWhatsappUnread(0);return}
+      unsubscribe=databaseService.onConversationsChange(sessionId,(conversations)=>setWhatsappUnread(conversations.reduce((total,conversation)=>total+(conversation.unreadCount||0),0)));
+    }).catch(()=>setWhatsappUnread(0));
+    return()=>{cancelled=true;unsubscribe()};
+  }, [user.id]);
 
   return (
     <header className="h-20 bg-surface-container-lowest border-b border-surface-container-high px-8 flex items-center justify-between sticky top-0 z-40">

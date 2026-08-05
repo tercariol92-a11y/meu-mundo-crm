@@ -369,7 +369,7 @@ export default function WhatsAppSettings() {
     setError(null);
     setSuccess(null);
     try {
-      await whatsappApi.disconnect(true);
+      await whatsappApi.disconnect(true, true);
       setSuccess('Sessão encerrada e dispositivo removido com sucesso!');
     } catch (err: any) {
       console.error('Error disconnecting from QR API:', err);

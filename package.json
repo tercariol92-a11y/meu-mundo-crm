@@ -7,6 +7,7 @@
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "build:whatsapp": "esbuild server/railwayServer.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-whatsapp/railwayServer.mjs",
+    "audit:whatsapp-sessions": "tsx scripts/audit-whatsapp-session-isolation.ts",
     "start:whatsapp": "node dist-whatsapp/railwayServer.mjs",
     "start": "node dist/server.cjs",
     "postinstall": "node -e \"const fs = require('fs'); const p = './node_modules/whatsapp-rust-bridge/package.json'; if (fs.existsSync(p)) { const j = JSON.parse(fs.readFileSync(p, 'utf8')); j.main = './dist/index.js'; if (j.exports && j.exports['.']) { j.exports['.'].require = './dist/index.js'; j.exports['.'].default = './dist/index.js'; } fs.writeFileSync(p, JSON.stringify(j, null, 2)); console.log('Patched whatsapp-rust-bridge exports successfully!'); }\" && node scripts/patch-baileys-profile-picture.cjs",

@@ -1,0 +1,23 @@
+{
+  "generatedAt": "2026-08-05T22:53:58.270Z",
+  "mode": "read-only",
+  "collections": [
+    {
+      "collection": "leads",
+      "conversations": 110,
+      "withoutSessionId": 82,
+      "mixedIdentity": 0,
+      "messages": 736,
+      "messagesWithoutSessionId": 427
+    },
+    {
+      "collection": "whatsapp_groups",
+      "conversations": 183,
+      "withoutSessionId": 174,
+      "mixedIdentity": 0,
+      "messages": 42,
+      "messagesWithoutSessionId": 7
+    }
+  ],
+  "action": "Nenhum registro legado foi atribuído automaticamente ou apagado. O frontend passa a ignorá-lo por não possuir o sessionId ativo."
+}

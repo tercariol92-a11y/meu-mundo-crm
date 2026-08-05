@@ -1730,8 +1730,9 @@ export const databaseService = {
   },
 
   // Atendimento (WhatsApp - using subcollection leads/{telefone}/messages)
-  onConversationsChange(callback: (conversations: Conversation[]) => void) {
-    const q = query(collection(db, 'leads'));
+  onConversationsChange(activeSessionId: string, callback: (conversations: Conversation[]) => void) {
+    if (!activeSessionId) { callback([]); return () => {}; }
+    const q = query(collection(db, 'leads'), where('whatsappSessionId', '==', activeSessionId));
     let latestIndividuals: Conversation[] = [];
     let latestGroups: Conversation[] = [];
     const emit = () => callback([...latestIndividuals, ...latestGroups].sort((a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime()));
@@ -1742,6 +1743,10 @@ export const databaseService = {
       
       snap.docs.forEach(doc => {
         const data = doc.data();
+        if (data.whatsappSessionId !== activeSessionId) {
+          console.warn('[WHATSAPP SESSION FILTER] conversa ignorada', { itemSessionId: data.whatsappSessionId || '', activeSessionId });
+          return;
+        }
         const rawPhone = data.whatsapp || data.telefone || '';
         const norm = normalizePhone(rawPhone);
         
@@ -1812,7 +1817,7 @@ export const databaseService = {
       handleFirestoreError(error, OperationType.LIST, 'leads');
     });
 
-    const unsubscribeGroups = onSnapshot(query(collection(db, 'whatsapp_groups')), (snap) => {
+    const unsubscribeGroups = onSnapshot(query(collection(db, 'whatsapp_groups'), where('whatsappSessionId', '==', activeSessionId)), (snap) => {
       latestGroups = snap.docs.map(groupDoc => {
         const group: any = { id: groupDoc.id, ...groupDoc.data() };
         const lastAt = group.lastMessageAt?.toDate?.()?.toISOString() || group.lastMessageAt || group.updatedAt?.toDate?.()?.toISOString() || group.updatedAt || new Date().toISOString();
@@ -1875,8 +1880,8 @@ export const databaseService = {
     }
   },
 
-  onMessagesChange(leadId: string, callback: (messages: ChatMessage[]) => void) {
-    if (!leadId) return () => {};
+  onMessagesChange(leadId: string, activeSessionId: string, callback: (messages: ChatMessage[]) => void) {
+    if (!leadId || !activeSessionId) { callback([]); return () => {}; }
     
     // First, check if leadId is a normalized phone, if so, we should handle it
     // But usually leadId is the document ID passed from the list
@@ -1885,7 +1890,7 @@ export const databaseService = {
     );
     
     return onSnapshot(q, (snap) => {
-      const messages = snap.docs.map(mapDoc) as ChatMessage[];
+      const messages = snap.docs.map(mapDoc).filter((message:any)=>message.whatsappSessionId===activeSessionId||message.sessionId===activeSessionId) as ChatMessage[];
       // Sort in JS manually to provide full history in order
       messages.sort((a, b) => {
         const timeA = a.createdAt ? new Date(a.createdAt).getTime() : (a.timestamp ? new Date(a.timestamp).getTime() : Date.now());
@@ -1898,10 +1903,10 @@ export const databaseService = {
     });
   },
 
-  onGroupMessagesChange(groupId: string, callback: (messages: ChatMessage[]) => void) {
-    if (!groupId) return () => {};
+  onGroupMessagesChange(groupId: string, activeSessionId: string, callback: (messages: ChatMessage[]) => void) {
+    if (!groupId || !activeSessionId) { callback([]); return () => {}; }
     return onSnapshot(query(collection(db, 'whatsapp_groups', groupId, 'messages')), (snap) => {
-      const messages = snap.docs.map(mapDoc) as ChatMessage[];
+      const messages = snap.docs.map(mapDoc).filter((message:any)=>message.whatsappSessionId===activeSessionId||message.sessionId===activeSessionId) as ChatMessage[];
       const millis = (value: any) => value?.toMillis?.() || value?.toDate?.()?.getTime?.() || new Date(value || 0).getTime() || 0;
       messages.sort((a, b) => {
         const timeA = millis(a.createdAt || a.timestamp);

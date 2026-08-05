@@ -10,14 +10,16 @@ import type { Bucket } from '@google-cloud/storage';
 import { createSatisfactionRequest, detectSatisfactionScore, hasPendingSatisfactionRequest, processSatisfactionResponse } from './satisfactionService';
 
 export type SessionStatus = 'disconnected'|'connecting'|'qrcode'|'connected'|'error';
-export type WhatsAppSession = { userId:string; socket:WASocket|null; status:SessionStatus; phone:string; qrCodeDataUrl:string; lastConnectedAt:string|null; reconnectAttempts:number; authDirectory:string; reconnectTimer?:ReturnType<typeof setTimeout>; generation:number };
+export type WhatsAppSession = { userId:string; sessionId:string; socket:WASocket|null; status:SessionStatus; phone:string; qrCodeDataUrl:string; lastConnectedAt:string|null; reconnectAttempts:number; authDirectory:string; reconnectTimer?:ReturnType<typeof setTimeout>; generation:number };
 const sessions = new Map<string,WhatsAppSession>();
+const activeSessionByUid = new Map<string,string>();
 const logger = pino({level:'silent'});
 let db:any=null;
 let mediaBucket:Bucket|null=null;
 const ROOT=path.resolve(process.env.BAILEYS_AUTH_ROOT||path.join(process.cwd(),'auth_info_baileys'));
 const safeUid=(uid:string)=>{if(!/^[A-Za-z0-9_-]{6,128}$/.test(uid))throw new Error('UID inválido.');return uid};
-const groupDocId=(uid:string,jid:string)=>`${uid}_${jid.replace(/@g\.us$/,'').replace(/[^A-Za-z0-9_-]/g,'_')}`;
+const sessionIdOf=(uid:string,phone:string)=>`${safeUid(uid)}_${String(phone||'pending').replace(/\D/g,'')||'pending'}`;
+const groupDocId=(sessionId:string,jid:string)=>`${sessionId}_${jid.replace(/@g\.us$/,'').replace(/[^A-Za-z0-9_-]/g,'_')}`;
 const phoneOf=(jid:string)=>jid.split('@')[0].split(':')[0].replace(/\D/g,'');
 async function persistPublicFile(buffer:Buffer,storagePath:string,contentType:string,metadata:Record<string,string>){
   const bucket=mediaBucket;
@@ -41,7 +43,7 @@ export function validateWhatsAppPhone(rawPhone: unknown): { valid: true; phone: 
 const extract=(m?:proto.IMessage|null):{body:string,type:string,caption?:string}|null=>{if(!m)return null;if(m.ephemeralMessage?.message)return extract(m.ephemeralMessage.message);if(m.viewOnceMessage?.message)return extract(m.viewOnceMessage.message);if(m.viewOnceMessageV2?.message)return extract(m.viewOnceMessageV2.message);if(m.conversation)return{body:m.conversation,type:'text'};if(m.extendedTextMessage?.text)return{body:m.extendedTextMessage.text,type:'text'};if(m.imageMessage)return{body:m.imageMessage.caption||'[Foto recebida]',type:'image',caption:m.imageMessage.caption||''};if(m.videoMessage)return{body:m.videoMessage.caption||'[Vídeo recebido]',type:'video',caption:m.videoMessage.caption||''};if(m.audioMessage)return{body:'[Áudio recebido]',type:'audio'};if(m.documentMessage)return{body:m.documentMessage.caption||m.documentMessage.fileName||'[Documento recebido]',type:'document',caption:m.documentMessage.caption||''};if(m.protocolMessage)return null;return{body:'[Mensagem não textual recebida]',type:'media'}};
 
 async function owner(uid:string){const s=await db?.collection('usuarios').doc(uid).get();const d=s?.exists?s.data():{};return{name:d?.displayName||d?.nome||d?.name||d?.email?.split('@')[0]||'Atendente',email:d?.email||''}}
-async function saveSession(s:WhatsAppSession,error=''){if(!db)return;const o=await owner(s.userId);await db.collection('whatsapp_sessions').doc(s.userId).set({userId:s.userId,userName:o.name,userEmail:o.email,phone:s.phone,sessionName:`whatsapp_${s.userId}`,status:s.status,qrCodeDataUrl:s.qrCodeDataUrl,lastConnectedAt:s.lastConnectedAt,lastError:error,provider:'baileys',isActive:s.status==='connected',updatedAt:FieldValue.serverTimestamp(),createdAt:FieldValue.serverTimestamp()},{merge:true})}
+async function saveSession(s:WhatsAppSession,error=''){if(!db)return;const o=await owner(s.userId);await db.collection('whatsapp_sessions').doc(s.userId).set({userId:s.userId,firebaseUid:s.userId,sessionId:s.sessionId,connectedPhone:s.phone,userName:o.name,userEmail:o.email,phone:s.phone,sessionName:`whatsapp_${s.sessionId}`,status:s.status,qrCodeDataUrl:s.qrCodeDataUrl,lastConnectedAt:s.lastConnectedAt,lastError:error,provider:'baileys',isActive:s.status==='connected',updatedAt:FieldValue.serverTimestamp(),createdAt:FieldValue.serverTimestamp()},{merge:true})}
 async function saveMedia(s: WhatsAppSession, msg: any, scope: string, id: string) {
   const leaf: any = msg.message?.ephemeralMessage?.message || msg.message;
   const media = leaf?.imageMessage || leaf?.videoMessage || leaf?.audioMessage || leaf?.documentMessage;
@@ -58,7 +60,7 @@ async function saveMedia(s: WhatsAppSession, msg: any, scope: string, id: string
     const defaultBaseName = leaf.imageMessage ? 'imagem' : leaf.videoMessage ? 'video' : leaf.audioMessage ? 'audio' : 'arquivo';
     const receivedName = String(leaf.documentMessage?.fileName || `${defaultBaseName}.${extension}`);
     const fileName = receivedName.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 160) || `${defaultBaseName}.${extension}`;
-    const storagePath = `whatsapp-media/${s.userId}/${scope}/${id}/${fileName}`;
+    const storagePath = `whatsapp-sessions/${s.userId}/${s.sessionId}/media/${scope}/${id}/${fileName}`;
     console.log(`[WhatsApp Media] mídia baixada; messageId=${id}; bytes=${buffer.length}`);
     const stored=await persistPublicFile(buffer,storagePath,mimetype,{fileName,telefone:scope,messageId:id,origem:'WhatsApp QR Code',ownerUserId:s.userId});
     console.log(`[WhatsApp Media] upload concluído; messageId=${id}; path=${storagePath}`);
@@ -105,7 +107,7 @@ async function refreshContactAvatar(s: WhatsAppSession, msg: any, phone: string,
       if (!response.ok) throw new Error(`download HTTP ${response.status}`);
       const buffer = Buffer.from(await response.arrayBuffer());
       const contentType = response.headers.get('content-type') || 'image/jpeg';
-      const storagePath = `whatsapp-profile-pictures/${s.userId}/${phone}/avatar.jpg`;
+      const storagePath = `whatsapp-sessions/${s.userId}/${s.sessionId}/profile-pictures/${phone}.jpg`;
       const stored=await persistPublicFile(buffer,storagePath,contentType,{telefone:phone,origem:'WhatsApp QR Code',ownerUserId:s.userId});
       const permanentUrl=stored.mediaUrl;
       console.log(`[WhatsApp Avatar] foto salva; JID=${jid}; telefone=${phone}`);
@@ -144,13 +146,10 @@ export async function getSessionProfilePicture(uid:string,rawJid:string,force=fa
   const collection=db.collection(collectionName);
   const queryField=isGroup?'remoteJid':'telefone';
   const queryValue=isGroup?jid:phone;
-  const owned=await collection.where('whatsappOwnerUserId','==',uid).where(queryField,'==',queryValue).limit(1).get();
+  const owned=await collection.where('whatsappSessionId','==',s.sessionId).where(queryField,'==',queryValue).limit(1).get();
   let snapshot=owned.empty?null:owned.docs[0];
-  if(!snapshot){
-    const legacy=await collection.where(queryField,'==',queryValue).limit(5).get();
-    snapshot=legacy.docs.find((document:any)=>!document.data()?.whatsappOwnerUserId||document.data()?.whatsappOwnerUserId===uid)||null;
-  }
-  const ref=snapshot?.ref||(isGroup?collection.doc(groupDocId(uid,jid)):collection.doc());
+  if(!snapshot) snapshot=null;
+  const ref=snapshot?.ref||(isGroup?collection.doc(groupDocId(s.sessionId,jid)):collection.doc());
   const current=snapshot?.data()||{};
   const cachedUrl=String(current.profilePictureUrl||current.groupPhotoUrl||current.profilePicture||current.avatarUrl||current.photoUrl||current.picture||'').trim();
   const updatedAt=timestampMillis(current.profilePictureUpdatedAt);
@@ -163,7 +162,7 @@ export async function getSessionProfilePicture(uid:string,rawJid:string,force=fa
       if(code===401||code===403||code===404)return undefined;
       throw error;
     });
-    const baseFields={jid,phone,contactName:current.nome||current.name||current.subject||current.pushName||(isGroup?'Grupo WhatsApp':'Contato WhatsApp'),profilePictureUpdatedAt:FieldValue.serverTimestamp()};
+    const baseFields={firebaseUid:uid,sessionId:s.sessionId,whatsappSessionId:s.sessionId,connectedPhone:s.phone,jid,phone,contactName:current.nome||current.name||current.subject||current.pushName||(isGroup?'Grupo WhatsApp':'Contato WhatsApp'),profilePictureUpdatedAt:FieldValue.serverTimestamp()};
     if(!temporaryUrl){
       await ref.set(baseFields,{merge:true});
       console.log('[PROFILE PICTURE RESULT]',{jid,found:false,stored:false});
@@ -181,7 +180,7 @@ export async function getSessionProfilePicture(uid:string,rawJid:string,force=fa
     const buffer=Buffer.from(await response.arrayBuffer());
     const contentType=response.headers.get('content-type')||'image/jpeg';
     const safeJid=jid.replace(/[^A-Za-z0-9@._-]/g,'_');
-    const stored=await persistPublicFile(buffer,`whatsapp-profile-pictures/${uid}/${safeJid}.jpg`,contentType,{jid,phone,origem:'WhatsApp QR Code',ownerUserId:uid});
+    const stored=await persistPublicFile(buffer,`whatsapp-sessions/${uid}/${s.sessionId}/profile-pictures/${safeJid}.jpg`,contentType,{jid,phone,origem:'WhatsApp QR Code',ownerUserId:uid,sessionId:s.sessionId});
     await ref.set({...baseFields,profilePictureUrl:stored.mediaUrl},{merge:true});
     console.log('[PROFILE PICTURE RESULT]',{jid,found:true,stored:true});
     return stored.mediaUrl;
@@ -191,8 +190,23 @@ export async function getSessionProfilePicture(uid:string,rawJid:string,force=fa
     throw error;
   }
 }
-async function onMessage(s:WhatsAppSession,msg:any){const jid=msg.key.remoteJid||'';if(jid==='status@broadcast'||jid.includes('newsletter'))return;const isGroup=jid.endsWith('@g.us');if(!isGroup&&!jid.endsWith('@s.whatsapp.net')&&!jid.endsWith('@lid'))return;const x=extract(msg.message);if(!x)return;const id=msg.key.id||`msg-${Date.now()}`;const o=await owner(s.userId);if(isGroup){const meta=await s.socket!.groupMetadata(jid);const gid=groupDocId(s.userId,jid);const ref=db.collection('whatsapp_groups').doc(gid);const mref=ref.collection('messages').doc(id);if((await mref.get()).exists)return;const participant=msg.key.participant||msg.participant||'';const pname=msg.key.fromMe?'WhatsApp Web':msg.pushName||phoneOf(participant)||'Participante';const media=await saveMedia(s,msg,`group-${gid}`,id);await mref.set({messageId:id,remoteJid:jid,groupId:gid,groupName:meta.subject,isGroup:true,participantJid:participant,participantPhone:phoneOf(participant),participantName:pname,body:x.body,mensagem:x.body,type:x.type,direction:msg.key.fromMe?'out':'in',fromMe:!!msg.key.fromMe,status:msg.key.fromMe?'sent':'received',ownerUserId:s.userId,whatsappOwnerUserId:s.userId,whatsappSessionId:s.userId,sessionPhone:s.phone,sentByUserId:null,...media,timestamp:FieldValue.serverTimestamp(),createdAt:FieldValue.serverTimestamp()});await ref.set({groupId:gid,groupJid:jid,remoteJid:jid,name:meta.subject,subject:meta.subject,participantsCount:meta.participants.length,isGroup:true,ownerUserId:s.userId,whatsappOwnerUserId:s.userId,whatsappSessionId:s.userId,sessionPhone:s.phone,lastMessage:`${pname}: ${x.body}`,lastMessageAt:FieldValue.serverTimestamp(),lastMessageId:id,...(!msg.key.fromMe?{unreadCount:FieldValue.increment(1)}:{}),updatedAt:FieldValue.serverTimestamp()},{merge:true});return}
-const raw=jid.endsWith('@lid')?(msg.key.remoteJidAlt||''):jid;if(!raw.endsWith('@s.whatsapp.net'))return;const phone=phoneOf(raw);const leads=db.collection('leads');const q=await leads.where('whatsappOwnerUserId','==',s.userId).where('telefone','==',phone).limit(1).get();const ref=q.empty?leads.doc():q.docs[0].ref;const mref=ref.collection('messages').doc(id);if((await mref.get()).exists)return;const media=await saveMedia(s,msg,phone,id);await mref.set({messageId:id,metaMessageId:id,telefone:phone,phone,body:x.body,mensagem:x.body,type:x.type,direction:msg.key.fromMe?'out':'in',fromMe:!!msg.key.fromMe,status:msg.key.fromMe?'sent':'received',ownerUserId:s.userId,whatsappOwnerUserId:s.userId,whatsappSessionId:s.userId,sessionPhone:s.phone,sentByUserId:null,...media,timestamp:FieldValue.serverTimestamp(),createdAt:FieldValue.serverTimestamp()});await ref.set({nome:msg.pushName||'Contato WhatsApp',telefone:phone,phone,whatsapp:phone,channel:'whatsapp_qr',ownerUserId:s.userId,ownerUserName:o.name,ownerUserEmail:o.email,whatsappOwnerUserId:s.userId,whatsappSessionId:s.userId,sessionPhone:s.phone,assignedUserId:s.userId,assignedUserName:o.name,ultimaMensagem:x.body,lastMessage:x.body,lastMessageAt:FieldValue.serverTimestamp(),lastMessageId:id,...(!msg.key.fromMe?{unreadCount:FieldValue.increment(1)}:{}),updatedAt:FieldValue.serverTimestamp(),status:'Em atendimento'},{merge:true});if(!msg.key.fromMe&&x.type==='text'){await processSatisfactionResponse(db,{phone,sessionOwnerUid:s.userId,messageId:id,text:x.body,leadId:ref.id,sendAcknowledgement:(text)=>sendSessionMessage(s.userId,phone,text)})}}
+async function onMessage(s:WhatsAppSession,msg:any){
+  const jid=msg.key.remoteJid||'';
+  if(!jid.endsWith('@g.us'))return;
+  const x=extract(msg.message);if(!x)return;
+  const id=msg.key.id||`msg-${Date.now()}`;
+  const meta=await s.socket!.groupMetadata(jid);
+  const gid=groupDocId(s.sessionId,jid);
+  const ref=db.collection('whatsapp_groups').doc(gid);
+  const mref=ref.collection('messages').doc(id);
+  if((await mref.get()).exists)return;
+  const participant=msg.key.participant||msg.participant||'';
+  const pname=msg.key.fromMe?'WhatsApp Web':msg.pushName||phoneOf(participant)||'Participante';
+  const media=await saveMedia(s,msg,`group-${gid}`,id);
+  const sessionFields={firebaseUid:s.userId,ownerUserId:s.userId,whatsappOwnerUserId:s.userId,whatsappSessionId:s.sessionId,sessionId:s.sessionId,connectedPhone:s.phone,sessionPhone:s.phone,jid,chatId:jid};
+  await mref.set({...sessionFields,messageId:id,remoteJid:jid,groupId:gid,groupName:meta.subject,isGroup:true,participantJid:participant,participantPhone:phoneOf(participant),participantName:pname,body:x.body,mensagem:x.body,type:x.type,direction:msg.key.fromMe?'out':'in',fromMe:!!msg.key.fromMe,status:msg.key.fromMe?'sent':'received',sentByUserId:null,...media,timestamp:FieldValue.serverTimestamp(),createdAt:FieldValue.serverTimestamp()});
+  await ref.set({...sessionFields,groupId:gid,groupJid:jid,remoteJid:jid,name:meta.subject,subject:meta.subject,participantsCount:meta.participants.length,isGroup:true,lastMessage:`${pname}: ${x.body}`,lastMessageAt:FieldValue.serverTimestamp(),lastMessageId:id,...(!msg.key.fromMe?{unreadCount:FieldValue.increment(1)}:{}),updatedAt:FieldValue.serverTimestamp()},{merge:true});
+}
 
 async function onSessionMessage(s: WhatsAppSession, msg: any) {
   const jid = msg.key.remoteJid || '';
@@ -216,7 +230,7 @@ async function onSessionMessage(s: WhatsAppSession, msg: any) {
   let pendingByRequest = await hasPendingSatisfactionRequest(db, phone, s.userId);
 
   const leads = db.collection('leads');
-  const ownedLead = await leads.where('whatsappOwnerUserId', '==', s.userId).where('telefone', '==', phone).limit(1).get();
+  const ownedLead = await leads.where('whatsappSessionId', '==', s.sessionId).where('telefone', '==', phone).limit(1).get();
   const leadRef = !ownedLead.empty
     ? ownedLead.docs[0].ref
     : pendingRequest?.leadId
@@ -266,8 +280,8 @@ async function onSessionMessage(s: WhatsAppSession, msg: any) {
     body: extracted.body, mensagem: extracted.body, type: extracted.type,
     direction: msg.key.fromMe ? 'out' : 'in', fromMe: Boolean(msg.key.fromMe),
     status: msg.key.fromMe ? 'sent' : 'received', ownerUserId: s.userId,
-    whatsappOwnerUserId: s.userId, whatsappSessionId: s.userId,
-    sessionPhone: s.phone, sentByUserId: null, ...media,
+    firebaseUid: s.userId, whatsappOwnerUserId: s.userId, whatsappSessionId: s.sessionId, sessionId: s.sessionId,
+    connectedPhone: s.phone, sessionPhone: s.phone, jid: rawJid, chatId: rawJid, sentByUserId: null, ...media,
     timestamp, createdAt: timestamp
   });
 
@@ -298,8 +312,8 @@ async function onSessionMessage(s: WhatsAppSession, msg: any) {
   await leadRef.set({
     nome: leadData?.nome || msg.pushName || 'Contato WhatsApp', telefone: phone, phone, whatsapp: phone,
     channel: 'whatsapp_qr', ownerUserId: s.userId, ownerUserName: ownerData.name,
-    ownerUserEmail: ownerData.email, whatsappOwnerUserId: s.userId, whatsappSessionId: s.userId,
-    sessionPhone: s.phone, assignedUserId: leadData?.assignedUserId || s.userId,
+    ownerUserEmail: ownerData.email, firebaseUid: s.userId, whatsappOwnerUserId: s.userId, whatsappSessionId: s.sessionId, sessionId: s.sessionId,
+    connectedPhone: s.phone, sessionPhone: s.phone, jid: rawJid, chatId: rawJid, assignedUserId: leadData?.assignedUserId || s.userId,
     assignedUserName: leadData?.assignedUserName || ownerData.name,
     ...avatarFields,
     ultimaMensagem: extracted.body, lastMessage: extracted.body, lastMessageAt: timestamp, lastMessageId: messageId,
@@ -311,12 +325,88 @@ async function onSessionMessage(s: WhatsAppSession, msg: any) {
 }
 
 export function initWhatsAppSessions(database:any,bucket:Bucket|null=null){db=database;mediaBucket=bucket;void initializeExistingSessions()}
-export function getWhatsAppSession(uid:string){return sessions.get(safeUid(uid))||null}
+export function getWhatsAppSession(uid:string){const safe=safeUid(uid);const sessionId=activeSessionByUid.get(safe);return sessionId?sessions.get(sessionId)||null:null}
 export function getWhatsAppSocket(uid:string){return getWhatsAppSession(uid)?.socket||null}
-export async function connectWhatsApp(uid:string,force=false,resetCredentials=false){safeUid(uid);const old=sessions.get(uid);if(old?.socket&&!force&&(old.status==='connected'||old.status==='connecting'||old.status==='qrcode'))return;if(old?.reconnectTimer)clearTimeout(old.reconnectTimer);try{old?.socket?.ev.removeAllListeners();old?.socket?.end(undefined)}catch{}sessions.delete(uid);const authDirectory=path.join(ROOT,uid);if(resetCredentials){console.log(`[WhatsApp QR] reiniciando credenciais somente do UID ${uid}: ${authDirectory}`);await fs.promises.rm(authDirectory,{recursive:true,force:true})}const s:WhatsAppSession={userId:uid,socket:null,status:'connecting',phone:'',qrCodeDataUrl:'',lastConnectedAt:null,reconnectAttempts:old?.reconnectAttempts||0,authDirectory,generation:(old?.generation||0)+1};sessions.set(uid,s);await fs.promises.mkdir(s.authDirectory,{recursive:true});console.log(`[WhatsApp QR] iniciando sessão UID=${uid} authDirectory=${s.authDirectory}`);const auth=await useMultiFileAuthState(s.authDirectory);const {version}=await fetchLatestWaWebVersion();const socket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.macOS('Chrome'),printQRInTerminal:false});s.socket=socket;socket.ev.on('creds.update',auth.saveCreds);socket.ev.on('messages.upsert',async e=>{if(e.type!=='notify'||sessions.get(uid)!==s)return;for(const m of e.messages)await onSessionMessage(s,m).catch(err=>console.error(`[WA ${uid}] mensagem:`,err?.message))});socket.ev.on('connection.update',async u=>{if(sessions.get(uid)!==s)return;if(u.qr){s.status='qrcode';s.qrCodeDataUrl=await QRCode.toDataURL(u.qr);console.log(`[WhatsApp QR] QR gerado UID=${uid} tamanho=${s.qrCodeDataUrl.length}`);void saveSession(s).catch(error=>console.error(`[WhatsApp QR] falha ao salvar QR UID=${uid}:`,error?.message))}if(u.connection==='open'){s.status='connected';s.phone=phoneOf(socket.user?.id||'');s.lastConnectedAt=new Date().toISOString();s.reconnectAttempts=0;s.qrCodeDataUrl='';console.log(`[WhatsApp QR] sessão conectada UID=${uid}`);void saveSession(s).catch(error=>console.error(`[WhatsApp QR] falha ao salvar sessão UID=${uid}:`,error?.message))}if(u.connection==='close'){const code=(u.lastDisconnect?.error as Boom)?.output?.statusCode;s.socket=null;s.status=code===DisconnectReason.loggedOut?'disconnected':'connecting';void saveSession(s,String(code||'')).catch(error=>console.error(`[WhatsApp QR] falha ao salvar desconexão UID=${uid}:`,error?.message));if(code!==DisconnectReason.loggedOut&&s.reconnectAttempts<6){const delay=Math.min(1000*2**s.reconnectAttempts++,30000);s.reconnectTimer=setTimeout(()=>void connectWhatsApp(uid,true),delay)}}});void saveSession(s).catch(error=>console.error(`[WhatsApp QR] falha ao salvar início UID=${uid}:`,error?.message))}
-export async function disconnectWhatsApp(uid:string,clear=false){const s=sessions.get(safeUid(uid));if(!s)return;if(s.reconnectTimer)clearTimeout(s.reconnectTimer);try{s.socket?.ev.removeAllListeners();s.socket?.end(undefined)}catch{}s.socket=null;s.status='disconnected';s.qrCodeDataUrl='';await saveSession(s);sessions.delete(uid);if(clear)await fs.promises.rm(s.authDirectory,{recursive:true,force:true})}
+const isCurrentSession=(uid:string,s:WhatsAppSession)=>getWhatsAppSession(uid)===s;
+export async function connectWhatsApp(uid:string,force=false,resetCredentials=false){
+  safeUid(uid);const old=getWhatsAppSession(uid);
+  if(old?.socket&&!force&&(old.status==='connected'||old.status==='connecting'||old.status==='qrcode'))return;
+  if(old?.reconnectTimer)clearTimeout(old.reconnectTimer);
+  try{old?.socket?.ev.removeAllListeners();old?.socket?.end(undefined)}catch{}
+  if(old)sessions.delete(old.sessionId);
+  const authDirectory=path.join(ROOT,uid);
+  if(resetCredentials)await fs.promises.rm(authDirectory,{recursive:true,force:true});
+  const pendingId=sessionIdOf(uid,'');
+  const s:WhatsAppSession={userId:uid,sessionId:pendingId,socket:null,status:'connecting',phone:'',qrCodeDataUrl:'',lastConnectedAt:null,reconnectAttempts:old?.reconnectAttempts||0,authDirectory,generation:(old?.generation||0)+1};
+  sessions.set(pendingId,s);activeSessionByUid.set(uid,pendingId);
+  await fs.promises.mkdir(s.authDirectory,{recursive:true});
+  console.log('[WHATSAPP SESSION ACTIVE]',{firebaseUid:uid,sessionId:s.sessionId,connectedPhone:''});
+  const auth=await useMultiFileAuthState(s.authDirectory);const {version}=await fetchLatestWaWebVersion();
+  const socket=makeWASocket({version,auth:auth.state,logger,browser:Browsers.macOS('Chrome'),printQRInTerminal:false});s.socket=socket;
+  socket.ev.on('creds.update',auth.saveCreds);
+  socket.ev.on('messages.upsert',async e=>{if(e.type!=='notify'||!isCurrentSession(uid,s))return;for(const m of e.messages)await onSessionMessage(s,m).catch(err=>console.error(`[WA ${uid}] mensagem:`,err?.message))});
+  socket.ev.on('connection.update',async u=>{
+    if(!isCurrentSession(uid,s))return;
+    if(u.qr){s.status='qrcode';s.qrCodeDataUrl=await QRCode.toDataURL(u.qr);void saveSession(s)}
+    if(u.connection==='open'){
+      const oldSessionId=s.sessionId;s.phone=phoneOf(socket.user?.id||'');s.sessionId=sessionIdOf(uid,s.phone);
+      sessions.delete(oldSessionId);sessions.set(s.sessionId,s);activeSessionByUid.set(uid,s.sessionId);
+      s.status='connected';s.lastConnectedAt=new Date().toISOString();s.reconnectAttempts=0;s.qrCodeDataUrl='';
+      console.log('[WHATSAPP SESSION SWITCH]',{oldSessionId,newSessionId:s.sessionId});
+      console.log('[WHATSAPP SESSION ACTIVE]',{firebaseUid:uid,sessionId:s.sessionId,connectedPhone:s.phone});
+      void saveSession(s);
+    }
+    if(u.connection==='close'){
+      const code=(u.lastDisconnect?.error as Boom)?.output?.statusCode;s.socket=null;s.status=code===DisconnectReason.loggedOut?'disconnected':'connecting';void saveSession(s,String(code||''));
+      if(code!==DisconnectReason.loggedOut&&s.reconnectAttempts<6){const delay=Math.min(1000*2**s.reconnectAttempts++,30000);s.reconnectTimer=setTimeout(()=>void connectWhatsApp(uid,true),delay)}
+    }
+  });
+  void saveSession(s);
+}
+
+async function deleteSessionHistory(s:WhatsAppSession){
+  let conversationsDeleted=0,messagesDeleted=0,mediaDeleted=0;
+  for(const collectionName of ['leads','whatsapp_groups']){
+    const current=await db.collection(collectionName).where('whatsappSessionId','==',s.sessionId).get();
+    const owned=await db.collection(collectionName).where('whatsappOwnerUserId','==',s.userId).get();
+    const documents=new Map(current.docs.map((document:any)=>[document.id,document]));
+    for(const document of owned.docs){
+      const data=document.data();
+      if(data.whatsappSessionId===s.userId&&String(data.sessionPhone||data.connectedPhone||'').replace(/\D/g,'')===s.phone)documents.set(document.id,document);
+    }
+    for(const document of documents.values() as any){
+      const data=document.data();
+      const messages=await document.ref.collection('messages').get();messagesDeleted+=messages.size;
+      if(mediaBucket){
+        for(const message of messages.docs){const storagePath=String(message.data().storagePath||'');if(storagePath){await mediaBucket.file(storagePath).delete().catch(()=>undefined);mediaDeleted++}}
+      }
+      const linked=collectionName==='leads'&&Boolean(data.clienteId||data.clientId||data.linkedClientId);
+      if(linked){
+        for(const message of messages.docs)await message.ref.delete();
+        await document.ref.set({whatsappSessionId:FieldValue.delete(),sessionId:FieldValue.delete(),connectedPhone:FieldValue.delete(),sessionPhone:FieldValue.delete(),ultimaMensagem:FieldValue.delete(),lastMessage:FieldValue.delete(),lastMessageId:FieldValue.delete(),unreadCount:0,updatedAt:FieldValue.serverTimestamp()},{merge:true});
+      }else{await db.recursiveDelete(document.ref);conversationsDeleted++}
+    }
+  }
+  const pending=await db.collection('satisfaction_requests').where('whatsappSessionOwnerUid','==',s.userId).get();
+  for(const document of pending.docs)if(document.data().status==='pending')await document.ref.delete();
+  if(mediaBucket){const [files]=await mediaBucket.getFiles({prefix:`whatsapp-sessions/${s.userId}/${s.sessionId}/`});mediaDeleted+=files.length;await Promise.all(files.map(file=>file.delete().catch(()=>undefined)))}
+  console.log('[WHATSAPP HISTORY DELETE]',{sessionId:s.sessionId,conversationsDeleted,messagesDeleted,mediaDeleted});
+  return{conversationsDeleted,messagesDeleted,mediaDeleted};
+}
+
+export async function disconnectWhatsApp(uid:string,clear=true,clearHistory=true){
+  const s=getWhatsAppSession(safeUid(uid));if(!s)return{sessionId:'',conversationsDeleted:0,messagesDeleted:0,mediaDeleted:0};
+  console.log('[WHATSAPP DISCONNECT START]',{sessionId:s.sessionId,connectedPhone:s.phone});
+  if(s.reconnectTimer)clearTimeout(s.reconnectTimer);try{s.socket?.ev.removeAllListeners();await s.socket?.logout()}catch{try{s.socket?.end(undefined)}catch{}}
+  s.socket=null;s.status='disconnected';s.qrCodeDataUrl='';
+  const deleted=clearHistory?await deleteSessionHistory(s):{conversationsDeleted:0,messagesDeleted:0,mediaDeleted:0};
+  await db.collection('whatsapp_sessions').doc(uid).delete().catch(()=>undefined);
+  sessions.delete(s.sessionId);activeSessionByUid.delete(uid);
+  if(clear)await fs.promises.rm(s.authDirectory,{recursive:true,force:true});
+  return{sessionId:s.sessionId,...deleted};
+}
 export const reconnectWhatsApp=(uid:string)=>connectWhatsApp(uid,true);
-export function getWhatsAppStatus(uid:string){const s=sessions.get(safeUid(uid));return s?{uid,status:s.status,sessionName:`whatsapp_${uid}`,sessionPhone:s.phone,qrCodeDataUrl:s.qrCodeDataUrl,lastConnectedAt:s.lastConnectedAt}:{uid,status:'disconnected',sessionName:`whatsapp_${uid}`,sessionPhone:'',qrCodeDataUrl:'',lastConnectedAt:null}}
+export function getWhatsAppStatus(uid:string){const s=getWhatsAppSession(uid);return s?{uid,sessionId:s.sessionId,connectedPhone:s.phone,status:s.status,sessionName:`whatsapp_${s.sessionId}`,sessionPhone:s.phone,qrCodeDataUrl:s.qrCodeDataUrl,lastConnectedAt:s.lastConnectedAt}:{uid,sessionId:'',connectedPhone:'',status:'disconnected',sessionName:'',sessionPhone:'',qrCodeDataUrl:'',lastConnectedAt:null}}
 export function listWhatsAppSessions(){return[...sessions.values()].map(s=>({userId:s.userId,...getWhatsAppStatus(s.userId)}))}
 export async function initializeExistingSessions(){if(!fs.existsSync(ROOT))return;for(const e of await fs.promises.readdir(ROOT,{withFileTypes:true}))if(e.isDirectory()&&/^[A-Za-z0-9_-]{6,128}$/.test(e.name))void connectWhatsApp(e.name)}
 export async function sendSessionMessage(uid:string,destination:string,text:string){const s=getWhatsAppSession(uid);if(!s?.socket||s.status!=='connected')throw new Error('Sessão WhatsApp do usuário desconectada.');const jid=destination.endsWith('@g.us')?destination:`${destination.replace(/\D/g,'')}@s.whatsapp.net`;const sent=await s.socket.sendMessage(jid,{text});return{success:true,messageId:sent?.key.id,jid,remoteJid:jid,messages:[{id:sent?.key.id}]}}
@@ -335,12 +425,12 @@ export async function sendSessionMedia(uid:string,destination:string,buffer:Buff
   if(!messageId)throw new Error('O WhatsApp não confirmou o messageId da mídia.');
   console.log('[IMAGE SENT TO WHATSAPP]',{messageId,chatId,status:'sent'});
 
-  const storagePath=`whatsapp-media/${uid}/${chatId}/${messageId}/${safeFileName}`;
+  const storagePath=`whatsapp-sessions/${uid}/${s.sessionId}/media/${chatId}/${messageId}/${safeFileName}`;
   const timestamp=FieldValue.serverTimestamp();
   const collectionName=isGroup?'whatsapp_groups':'leads';
   let parentRef:any=null;
   if(isGroup){
-    const groupId=context.groupId||groupDocId(uid,chatId);
+    const groupId=context.groupId||groupDocId(s.sessionId,chatId);
     parentRef=db.collection(collectionName).doc(groupId);
   }else{
     const hintedId=String(context.leadId||'').trim();
@@ -350,7 +440,7 @@ export async function sendSessionMedia(uid:string,destination:string,buffer:Buff
       if(hintedData&&(!hintedData.whatsappOwnerUserId||hintedData.whatsappOwnerUserId===uid))parentRef=hinted.ref;
     }
     if(!parentRef){
-      const match=await db.collection(collectionName).where('whatsappOwnerUserId','==',uid).where('telefone','==',phone).limit(1).get();
+      const match=await db.collection(collectionName).where('whatsappSessionId','==',s.sessionId).where('telefone','==',phone).limit(1).get();
       parentRef=match.empty?db.collection(collectionName).doc():match.docs[0].ref;
     }
   }
@@ -373,12 +463,13 @@ export async function sendSessionMedia(uid:string,destination:string,buffer:Buff
     fileSize:buffer.length,mediaUrl:stored?.mediaUrl||'',thumbnailUrl:type==='image'?(stored?.mediaUrl||''):'',storagePath,
     mediaStatus,mediaError,status:'sent',senderId:context.attendantId||uid,attendantId:context.attendantId||uid,
     attendantName:context.attendantName||'',attendantEmail:context.attendantEmail||'',
-    ownerUserId:uid,whatsappOwnerUserId:uid,whatsappSessionId:uid,conversationId:context.conversationId||parentRef.id,
+    firebaseUid:uid,ownerUserId:uid,whatsappOwnerUserId:uid,whatsappSessionId:s.sessionId,sessionId:s.sessionId,connectedPhone:s.phone,sessionPhone:s.phone,jid:chatId,
+    conversationId:context.conversationId||parentRef.id,
     timestamp,createdAt:timestamp
   };
   const batch=db.batch();
   batch.set(messageRef,messageDocument,{merge:true});
-  batch.set(parentRef,{lastMessage:caption||`[${type}] ${safeFileName}`,ultimaMensagem:caption||`[${type}] ${safeFileName}`,lastMessageId:messageId,lastMessageAt:timestamp,updatedAt:timestamp},{merge:true});
+  batch.set(parentRef,{firebaseUid:uid,whatsappOwnerUserId:uid,whatsappSessionId:s.sessionId,sessionId:s.sessionId,connectedPhone:s.phone,sessionPhone:s.phone,jid:chatId,chatId,lastMessage:caption||`[${type}] ${safeFileName}`,ultimaMensagem:caption||`[${type}] ${safeFileName}`,lastMessageId:messageId,lastMessageAt:timestamp,updatedAt:timestamp},{merge:true});
   await batch.commit();
   console.log('[MEDIA FIRESTORE SAVE]',{documentId:messageRef.id,messageId,mediaUrl:stored?.mediaUrl||'',type,mediaStatus});
   return{success:true,delivered:true,messageId,chatId,jid:chatId,remoteJid:chatId,canonicalPhone:phone,type,caption,mimeType:mimetype,mimetype,fileName:safeFileName,fileSize:buffer.length,mediaUrl:stored?.mediaUrl||'',thumbnailUrl:type==='image'?(stored?.mediaUrl||''):'',storagePath,timestamp:Date.now(),status:'sent',mediaStatus,mediaError};

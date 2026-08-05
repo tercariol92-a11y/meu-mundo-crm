@@ -165,6 +165,7 @@ function renderLinkedText(text: string) {
 
 function IncomingImage({ message }: { message: ChatMessage }) {
   const [loading, setLoading] = useState(true);
+  const [activeSessionId, setActiveSessionId] = useState<string>('');
   const [failed, setFailed] = useState(false);
   const legacyMessage = message as ChatMessage & { messageId?: string; imageUrl?: string; fileUrl?: string; url?: string };
   const mediaUrl = whatsappApi.resolveMediaUrl(legacyMessage);
@@ -404,7 +405,23 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const unsubscribe = databaseService.onConversationsChange((data) => {
+    let cancelled = false;
+    setConversations([]);setMessages([]);setSelectedId(null);previousUnread.current.clear();conversationSnapshotReady.current=false;
+    void whatsappApi.getStatus().then(result => {
+      if(cancelled)return;
+      const status=result?.status||{};
+      const next=status.status==='connected'?String(status.sessionId||''):'';
+      console.log('[WHATSAPP SESSION ACTIVE]',{firebaseUid:user.id,sessionId:next,connectedPhone:status.connectedPhone||status.sessionPhone||''});
+      setActiveSessionId(next);setLoading(false);
+    }).catch(error=>{if(!cancelled){console.error('[WHATSAPP SESSION STATUS]',error);setActiveSessionId('');setLoading(false)}});
+    return()=>{cancelled=true};
+  },[user.id]);
+
+  useEffect(() => {
+    setConversations([]);setMessages([]);setSelectedId(null);previousUnread.current.clear();conversationSnapshotReady.current=false;
+    if(!activeSessionId)return;
+    console.log('[WHATSAPP LISTENER START]',{sessionId:activeSessionId,collection:'leads,whatsapp_groups'});
+    const unsubscribe = databaseService.onConversationsChange(activeSessionId, (data) => {
       if (conversationSnapshotReady.current) {
         data.forEach(conv => {
           const oldUnread = previousUnread.current.get(conv.id) || 0;
@@ -460,8 +477,8 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
     // Load clients for linking
     databaseService.getClientes().then(setClients);
 
-    return () => unsubscribe();
-  }, [playIncomingSound]);
+    return () => { console.log('[WHATSAPP LISTENER STOP]',{sessionId:activeSessionId});unsubscribe(); };
+  }, [playIncomingSound, activeSessionId]);
 
   // Load proposals for the selected conversation
   useEffect(() => {
@@ -519,15 +536,15 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
   useEffect(() => {
     if (selectedConversation) {
       const unsubscribe = selectedConversation.isGroup && selectedConversation.groupId
-        ? databaseService.onGroupMessagesChange(selectedConversation.groupId, (data) => setMessages(data))
-        : databaseService.onMessagesChange(selectedConversation.leadId || selectedConversation.id, (data) => {
+        ? databaseService.onGroupMessagesChange(selectedConversation.groupId, activeSessionId, (data) => setMessages(data))
+        : databaseService.onMessagesChange(selectedConversation.leadId || selectedConversation.id, activeSessionId, (data) => {
         setMessages(data);
       });
       return () => unsubscribe();
     } else {
       setMessages([]);
     }
-  }, [selectedConversation]);
+  }, [selectedConversation, activeSessionId]);
 
   useEffect(() => {
     if (selectedId && conversations.length > 0) {

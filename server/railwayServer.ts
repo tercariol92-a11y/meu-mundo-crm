@@ -106,7 +106,13 @@ app.get('/api/whatsapp/qr/status', (req, res) => res.json({ success: true, statu
 app.post('/api/whatsapp/qr/connect', async (req, res, next) => { try { const uid=uidOf(req);await locked(uid,()=>connectWhatsApp(uid));res.status(202).json({success:true,status:getWhatsAppStatus(uid)}); } catch(error){next(error)} });
 app.post('/api/whatsapp/qr/generate', async (req, res, next) => { try { const uid=uidOf(req);await locked(uid,()=>connectWhatsApp(uid));res.status(202).json({success:true,status:getWhatsAppStatus(uid)}); } catch(error){next(error)} });
 app.post('/api/whatsapp/qr/reconnect', async (req, res, next) => { try { const uid=uidOf(req);await locked(uid,()=>reconnectWhatsApp(uid));res.status(202).json({success:true,status:getWhatsAppStatus(uid)}); } catch(error){next(error)} });
-app.post('/api/whatsapp/qr/disconnect', async (req, res, next) => { try { const uid=uidOf(req);await locked(uid,()=>disconnectWhatsApp(uid,req.body?.clearCredentials===true));res.json({success:true,status:getWhatsAppStatus(uid)}); } catch(error){next(error)} });
+app.post('/api/whatsapp/qr/disconnect', async (req, res, next) => {
+  try {
+    const uid=uidOf(req);
+    const cleanup=await locked(uid,()=>disconnectWhatsApp(uid,req.body?.clearCredentials!==false,req.body?.clearHistory!==false));
+    res.json({success:true,status:getWhatsAppStatus(uid),cleanup});
+  } catch(error){next(error)}
+});
 
 app.post('/api/whatsapp/send', async (req, res, next) => {
   try {

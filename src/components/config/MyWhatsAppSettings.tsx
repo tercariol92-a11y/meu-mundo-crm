@@ -84,7 +84,9 @@ export default function MyWhatsAppSettings() {
     if (loading || !window.confirm('Deseja desconectar somente o seu WhatsApp?')) return;
     setLoading(true); setError(''); setSuccess('');
     try {
-      await whatsappApi.disconnect();
+      await whatsappApi.disconnect(true, true);
+      Object.keys(localStorage).filter(key=>key.startsWith('whatsapp_')||key.startsWith('chat_')).forEach(key=>localStorage.removeItem(key));
+      Object.keys(sessionStorage).filter(key=>key.startsWith('whatsapp_')||key.startsWith('chat_')).forEach(key=>sessionStorage.removeItem(key));
       setSession(null); setStatus('disconnected'); setSuccess('Sua sessão foi desconectada.');
     } catch (disconnectError) {
       setError(disconnectError instanceof Error ? disconnectError.message : 'Falha ao desconectar sua sessão.');

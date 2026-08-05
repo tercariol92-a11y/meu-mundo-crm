@@ -99,9 +99,9 @@ export const whatsappApi = {
     return parseResponse(await authenticatedRequest(route, { method: 'POST' }));
   },
 
-  async disconnect(clearCredentials = false) {
+  async disconnect(clearCredentials = true, clearHistory = true) {
     return parseResponse(await authenticatedRequest(ROUTES.qrDisconnect, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clearCredentials })
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clearCredentials, clearHistory })
     }));
   },
 
