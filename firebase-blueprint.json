@@ -1,0 +1,688 @@
+{
+  "entities": {
+    "Usuario": {
+      "title": "Usuario",
+      "description": "Perfil do usuário do sistema",
+      "type": "object",
+      "properties": {
+        "nome": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["admin", "tecnico", "cliente"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["nome", "email", "role"]
+    },
+    "Cliente": {
+      "title": "Cliente",
+      "description": "Dados da empresa cliente",
+      "type": "object",
+      "properties": {
+        "razaoSocial": { "type": "string" },
+        "nomeFantasia": { "type": "string" },
+        "cnpj": { "type": "string" },
+        "inscricaoEstadual": { "type": "string" },
+        "inscricaoMunicipal": { "type": "string" },
+        "tipoPessoa": { "type": "string" },
+        "status": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "responsavelNome": { "type": "string" },
+        "responsavelCargo": { "type": "string" },
+        "telefoneFixo": { "type": "string" },
+        "celularWhatsapp": { "type": "string" },
+        "emailPrincipal": { "type": "string" },
+        "emailFinanceiro": { "type": "string" },
+        "emailTecnico": { "type": "string" },
+        "cep": { "type": "string" },
+        "rua": { "type": "string" },
+        "numero": { "type": "string" },
+        "complemento": { "type": "string" },
+        "bairro": { "type": "string" },
+        "cidade": { "type": "string" },
+        "estado": { "type": "string" },
+        "pais": { "type": "string" },
+        "origemLead": { "type": "string" },
+        "vendedorResponsavel": { "type": "string" },
+        "segmento": { "type": "string" },
+        "observacoesComerciais": { "type": "string" },
+        "possuiContrato": { "type": "boolean" },
+        "contratoNumero": { "type": "string" },
+        "contratoInicio": { "type": "string" },
+        "contratoVencimento": { "type": "string" },
+        "contratoValorMensal": { "type": "number" },
+        "slaAtendimento": { "type": "string" },
+        "suporteAtivo": { "type": "boolean" },
+        "usaEquipamento": { "type": "boolean" },
+        "equipamentoTipo": { "type": "string" },
+        "equipamentoMarca": { "type": "string" },
+        "equipamentoModelo": { "type": "string" },
+        "equipamentoSerie": { "type": "string" },
+        "equipamentoQuantidade": { "type": "number" },
+        "localInstalacao": { "type": "string" },
+        "possuiCatraca": { "type": "boolean" },
+        "possuiFacial": { "type": "boolean" },
+        "possuiPonto": { "type": "boolean" },
+        "usaSoftware": { "type": "boolean" },
+        "softwareNome": { "type": "string" },
+        "softwareTipo": { "type": "string" },
+        "softwareOrigem": { "type": "string" },
+        "integraSenior": { "type": "boolean" },
+        "integraTotvs": { "type": "boolean" },
+        "integraSecullum": { "type": "boolean" },
+        "integraOutro": { "type": "string" },
+        "observacoesTecnicas": { "type": "string" },
+        "formaPagamento": { "type": "string" },
+        "diaVencimento": { "type": "number" },
+        "financeiroResponsavel": { "type": "string" },
+        "pagadorCpfCnpj": { "type": "string" },
+        "banco": { "type": "string" },
+        "chavePix": { "type": "string" },
+        "inadimplente": { "type": "boolean" },
+        "observacoesInternas": { "type": "string" },
+        "historicoResumido": { "type": "string" },
+        "preferenciasAtendimento": { "type": "string" },
+        "restricoesTecnicas": { "type": "string" },
+        "emailsAutorizados": { "type": "array", "items": { "type": "string" } },
+        "usuariosVinculados": { "type": "array", "items": { "type": "string" } },
+        "usuarioId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["nomeFantasia", "status"]
+    },
+    "Lead": {
+      "title": "Lead",
+      "description": "Potencial cliente",
+      "type": "object",
+      "properties": {
+        "nome": { "type": "string" },
+        "empresa": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "telefone": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "cidade": { "type": "string" },
+        "estado": { "type": "string" },
+        "origem": { "type": "string" },
+        "interesse": { "type": "string" },
+        "responsavelId": { "type": "string" },
+        "status": { "type": "string" },
+        "valorEstimado": { "type": "number" },
+        "observacoes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["nome", "status"]
+    },
+    "Proposta": {
+      "title": "Proposta",
+      "description": "Orçamento ou proposta comercial",
+      "type": "object",
+      "properties": {
+        "clienteId": { "type": "string" },
+        "leadId": { "type": "string" },
+        "titulo": { "type": "string" },
+        "valor": { "type": "number" },
+        "status": { "type": "string", "enum": ["Rascunho", "Enviado", "Em negociação", "Aprovado", "Reprovado", "Cancelado"] },
+        "itens": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "produtoId": { "type": "string" },
+              "nome": { "type": "string" },
+              "quantidade": { "type": "number" },
+              "valorUnitario": { "type": "number" },
+              "total": { "type": "number" },
+              "imageUrl": { "type": "string" },
+              "descricao": { "type": "string" },
+              "beneficios": { "type": "string" }
+            }
+          }
+        },
+        "formaPagamento": { "type": "string" },
+        "prazoEntrega": { "type": "string" },
+        "validadeProposta": { "type": "string" },
+        "observacoes": { "type": "string" },
+        "solucaoProposta": { "type": "string" },
+        "sobreEmpresa": { "type": "string" },
+        "diferenciais": { "type": "string" },
+        "dataEnvio": { "type": "string", "format": "date-time" },
+        "dataAprovacao": { "type": "string", "format": "date-time" },
+        "vendedorId": { "type": "string" },
+        "motivoPerdaId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["titulo", "valor", "status"]
+    },
+    "Chamado": {
+      "title": "Chamado",
+      "description": "Ticket de suporte técnico",
+      "type": "object",
+      "properties": {
+        "clienteId": { "type": "string" },
+        "unidadeId": { "type": "string" },
+        "equipamentoId": { "type": "string" },
+        "equipamentoClienteId": { "type": "string" },
+        "tecnicoId": { "type": "string" },
+        "titulo": { "type": "string" },
+        "descricao": { "type": "string" },
+        "status": { "type": "string", "enum": ["aberto", "em_analise", "em_deslocamento", "em_atendimento", "aguardando_cliente", "aguardando_peca", "retorno_agendado", "finalizado", "não_concluido", "cancelado", "concluido"] },
+        "prioridade": { "type": "string", "enum": ["baixa", "media", "alta", "critica"] },
+        "tipoAtendimento": { "type": "string" },
+        "solucaoAplicada": { "type": "string" },
+        "observacoesTecnicas": { "type": "string" },
+        "servicoExecutado": { "type": "string" },
+        "fotos": { "type": "array", "items": { "type": "string" } },
+        "assinaturaCliente": { "type": "string" },
+        "assinaturaData": { "type": "string", "format": "date-time" },
+        "pecasUtilizadas": { 
+          "type": "array", 
+          "items": { 
+            "type": "object",
+            "properties": {
+              "nome": { "type": "string" },
+              "quantidade": { "type": "number" },
+              "valor": { "type": "number" }
+            }
+          }
+        },
+        "slaDeadline": { "type": "string", "format": "date-time" },
+        "isLate": { "type": "boolean" },
+        "sentToClient": { "type": "boolean" },
+        "sentVia": { "type": "string", "enum": ["email", "whatsapp", "both"] },
+        "dataFechamento": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clienteId", "titulo", "status"]
+    },
+    "Reminder": {
+      "title": "Reminder",
+      "description": "Lembrete vinculado a um chamado",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["abertura", "retorno", "visita", "fechamento"] },
+        "dateTime": { "type": "string", "format": "date-time" },
+        "responsibleId": { "type": "string" },
+        "ticketId": { "type": "string" },
+        "description": { "type": "string" },
+        "completed": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["type", "dateTime", "responsibleId", "ticketId"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "Notificação do sistema para o usuário",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "ticketId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string", "enum": ["info", "warning", "error", "success"] },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "message", "type"]
+    },
+    "AcaoComercial": {
+      "title": "AcaoComercial",
+      "description": "Histórico de ações comerciais",
+      "type": "object",
+      "properties": {
+        "leadId": { "type": "string" },
+        "clienteId": { "type": "string" },
+        "tipo": { "type": "string" },
+        "descricao": { "type": "string" },
+        "responsavelId": { "type": "string" },
+        "data": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tipo", "descricao", "data"]
+    },
+    "MotivoPerda": {
+      "title": "MotivoPerda",
+      "description": "Motivos de perda de leads/propostas",
+      "type": "object",
+      "properties": {
+        "descricao": { "type": "string" },
+        "ativo": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["descricao"]
+    },
+    "AgendaComercial": {
+      "title": "AgendaComercial",
+      "description": "Tarefas e compromissos comerciais",
+      "type": "object",
+      "properties": {
+        "leadId": { "type": "string" },
+        "clienteId": { "type": "string" },
+        "titulo": { "type": "string" },
+        "descricao": { "type": "string" },
+        "tipo": { "type": "string" },
+        "data": { "type": "string", "format": "date-time" },
+        "status": { "type": "string" },
+        "responsavelId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["titulo", "data", "status"]
+    },
+    "Meta": {
+      "title": "Meta",
+      "description": "Metas comerciais",
+      "type": "object",
+      "properties": {
+        "mes": { "type": "integer" },
+        "ano": { "type": "integer" },
+        "valorObjetivo": { "type": "number" },
+        "tipo": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["mes", "ano", "valorObjetivo"]
+    },
+    "Unidade": {
+      "title": "Unidade",
+      "description": "Unidade ou filial do cliente",
+      "type": "object",
+      "properties": {
+        "clienteId": { "type": "string" },
+        "nome": { "type": "string" },
+        "endereco": { "type": "string" },
+        "cidade": { "type": "string" },
+        "estado": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clienteId", "nome"]
+    },
+    "Tecnico": {
+      "title": "Tecnico",
+      "description": "Técnico de suporte",
+      "type": "object",
+      "properties": {
+        "usuarioId": { "type": "string" },
+        "nome": { "type": "string" },
+        "especialidade": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["usuarioId", "nome", "status"]
+    },
+    "Equipamento": {
+      "title": "Equipamento",
+      "description": "Catálogo de equipamentos",
+      "type": "object",
+      "properties": {
+        "unidadeId": { "type": "string" },
+        "nome": { "type": "string" },
+        "modelo": { "type": "string" },
+        "numeroSerie": { "type": "string" },
+        "dataInstalacao": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["unidadeId", "nome"]
+    },
+    "EquipamentoCliente": {
+      "title": "EquipamentoCliente",
+      "description": "Equipamento instalado no cliente",
+      "type": "object",
+      "properties": {
+        "clienteId": { "type": "string" },
+        "tipo": { "type": "string", "enum": ["Catraca", "Facial", "Ponto", "Outros"] },
+        "nome": { "type": "string" },
+        "categoria": { "type": "string" },
+        "marca": { "type": "string" },
+        "modelo": { "type": "string" },
+        "numeroSerie": { "type": "string" },
+        "quantidade": { "type": "number" },
+        "localInstalacao": { "type": "string" },
+        "observacoesTecnicas": { "type": "string" },
+        "dataInstalacao": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["Ativo", "Inativo", "Manutenção"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clienteId", "tipo", "status"]
+    },
+    "Produto": {
+      "title": "Produto",
+      "description": "Catálogo de produtos com foco comercial e financeiro",
+      "type": "object",
+      "properties": {
+        "nome": { "type": "string" },
+        "descricao": { "type": "string" },
+        "categoria": { "type": "string", "enum": ["Catraca", "Facial", "Ponto", "Software", "Outros"] },
+        "marca": { "type": "string" },
+        "modelo": { "type": "string" },
+        "codigo": { "type": "string" },
+        "codigoBarras": { "type": "string" },
+        "custo": { "type": "number" },
+        "valorVenda": { "type": "number" },
+        "margem": { "type": "number" },
+        "ativo": { "type": "boolean" },
+        "permiteVenda": { "type": "boolean" },
+        "permiteLocacao": { "type": "boolean" },
+        "observacoes": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "beneficios": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["nome", "valorVenda", "ativo"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Conversa de atendimento via WhatsApp",
+      "type": "object",
+      "properties": {
+        "contactName": { "type": "string" },
+        "contactPhone": { "type": "string" },
+        "clientId": { "type": "string" },
+        "leadId": { "type": "string" },
+        "ticketId": { "type": "string" },
+        "channel": { "type": "string", "enum": ["whatsapp"] },
+        "status": { "type": "string", "enum": ["novo", "em_atendimento", "aguardando_cliente", "aguardando_interno", "finalizado", "convertido_chamado", "convertido_lead"] },
+        "assignedTo": { "type": "string" },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "lastMessageBody": { "type": "string" },
+        "unreadCount": { "type": "number" },
+        "metaWaId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["contactName", "contactPhone", "channel", "status"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Mensagem individual de uma conversa",
+      "type": "object",
+      "properties": {
+        "conversationId": { "type": "string" },
+        "direction": { "type": "string", "enum": ["inbound", "outbound"] },
+        "type": { "type": "string", "enum": ["text", "image", "document", "template"] },
+        "body": { "type": "string" },
+        "mediaUrl": { "type": "string" },
+        "metaMessageId": { "type": "string" },
+        "status": { "type": "string", "enum": ["sent", "delivered", "read", "failed"] },
+        "sender": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["conversationId", "direction", "type", "status"]
+    },
+    "WhatsAppConfig": {
+      "title": "WhatsAppConfig",
+      "description": "Configurações do WhatsApp (API Oficial ou QR Code)",
+      "type": "object",
+      "properties": {
+        "accessToken": { "type": "string" },
+        "phoneNumberId": { "type": "string" },
+        "businessAccountId": { "type": "string" },
+        "verifyToken": { "type": "string" },
+        "webhookUrl": { "type": "string" },
+        "apiKey": { "type": "string" },
+        "appName": { "type": "string" },
+        "source": { "type": "string" },
+        "integrationType": { "type": "string", "enum": ["official", "qrcode"] },
+        "sessionStatus": { "type": "string", "enum": ["connected", "disconnected", "connecting", "qrcode"] },
+        "qrCodeData": { "type": "string" },
+        "sessionPhone": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "WhatsAppTemplate": {
+      "title": "WhatsAppTemplate",
+      "description": "Templates de mensagens aprovados pela Meta",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "language": { "type": "string" },
+        "category": { "type": "string" },
+        "components": { "type": "array" },
+        "status": { "type": "string" }
+      },
+      "required": ["name", "language", "status"]
+    },
+    "SatisfactionReview": {
+      "title": "SatisfactionReview",
+      "description": "Resultado de pesquisa de satisfação pós-atendimento",
+      "type": "object",
+      "properties": {
+        "leadId": { "type": "string" },
+        "clienteNome": { "type": "string" },
+        "telefone": { "type": "string" },
+        "nota": { "type": "number" },
+        "atendente": { "type": "string" },
+        "tecnico": { "type": "string" },
+        "comentario": { "type": "string" },
+        "origem": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["leadId", "clienteNome", "telefone", "nota", "atendente", "origem", "createdAt"]
+    },
+    "ContaPagar": {
+      "title": "ContaPagar",
+      "description": "Contas a Pagar / Despesas financeiras da empresa",
+      "type": "object",
+      "properties": {
+        "descricao": { "type": "string" },
+        "categoria": { "type": "string" },
+        "categoryType": { "type": "string", "enum": ["fixa", "variavel"] },
+        "fornecedor": { "type": "string" },
+        "valor": { "type": "number" },
+        "dataVencimento": { "type": "string" },
+        "dataPagamento": { "type": "string" },
+        "status": { "type": "string", "enum": ["Pendente", "Pago", "Vencido"] },
+        "observacoes": { "type": "string" },
+        "comprovante": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "size": { "type": "number" },
+            "type": { "type": "string" },
+            "url": { "type": "string" }
+          }
+        },
+        "createdBy": { "type": "string" },
+        "createdByName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedBy": { "type": "string" },
+        "updatedByName": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["descricao", "categoria", "categoryType", "fornecedor", "valor", "dataVencimento", "status", "createdBy", "createdByName", "createdAt"]
+    },
+    "AccessLog": {
+      "title": "AccessLog",
+      "description": "Registro de acesso ao sistema",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "action": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "ip": { "type": "string" },
+        "device": { "type": "string" },
+        "location": { "type": "string" }
+      },
+      "required": ["userId", "action", "timestamp"]
+    },
+    "Documento": {
+      "title": "Documento",
+      "description": "Arquivo vinculado a um cliente ou chamado",
+      "type": "object",
+      "properties": {
+        "clienteId": { "type": "string" },
+        "nome": { "type": "string" },
+        "url": { "type": "string" },
+        "tipo": { "type": "string" },
+        "categoria": { "type": "string", "enum": ["Contrato", "Nota fiscal", "Garantia", "Foto do equipamento", "Evidência técnica", "Documento administrativo", "Outros"] },
+        "tamanho": { "type": "number" },
+        "enviadoPor": { "type": "string" },
+        "enviadoPorTipo": { "type": "string", "enum": ["cliente", "suporte"] },
+        "atendenteId": { "type": "string" },
+        "userId": { "type": "string" },
+        "status": { "type": "string", "enum": ["ativo", "excluido", "atualizado"] },
+        "ticketId": { "type": "string" },
+        "comentarios": { "type": "array" },
+        "historico": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clienteId", "nome", "url", "tipo", "status", "createdAt"]
+    },
+    "ProspectionCampaign": {
+      "title": "ProspectionCampaign",
+      "description": "Campanha de prospecção real",
+      "type": "object",
+      "properties": {
+        "nome": { "type": "string" },
+        "segmento": { "type": "string" },
+        "cidade": { "type": "string" },
+        "palavraChave": { "type": "string" },
+        "limiteLeads": { "type": "number" },
+        "canalEnvio": { "type": "string", "enum": ["WhatsApp", "E-mail", "Ambos"] },
+        "leadsContatados": { "type": "number" },
+        "mensagensEnviadas": { "type": "number" },
+        "respostasRecebidas": { "type": "number" },
+        "oportunidadesCriadas": { "type": "number" },
+        "status": { "type": "string", "enum": ["Ativa", "Pausada", "Finalizada"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["nome", "segmento", "cidade", "status"]
+    },
+    "ProspectionLead": {
+      "title": "ProspectionLead",
+      "description": "Lead de prospecção real",
+      "type": "object",
+      "properties": {
+        "nome": { "type": "string" },
+        "empresa": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "telefone": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "cidade": { "type": "string" },
+        "estado": { "type": "string" },
+        "origem": { "type": "string" },
+        "interesse": { "type": "string" },
+        "responsavelId": { "type": "string" },
+        "status": { "type": "string" },
+        "observacoes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["nome", "status"]
+    },
+    "ProspectionMessage": {
+      "title": "ProspectionMessage",
+      "description": "Mensagem de prospecção real",
+      "type": "object",
+      "properties": {
+        "leadId": { "type": "string" },
+        "leadNome": { "type": "string" },
+        "telefone": { "type": "string" },
+        "mensagem": { "type": "string" },
+        "status": { "type": "string", "enum": ["enviado", "entregue", "lido", "respondeu"] },
+        "tipo": { "type": "string", "enum": ["whatsapp", "email"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["leadId", "leadNome", "mensagem", "status", "tipo"]
+    },
+    "ContratoRecorrente": {
+      "title": "ContratoRecorrente",
+      "description": "Contratos recorrentes de mensalidade ou suporte",
+      "type": "object",
+      "properties": {
+        "clienteId": { "type": "string" },
+        "clienteNome": { "type": "string" },
+        "unidadeId": { "type": "string" },
+        "unidadeNome": { "type": "string" },
+        "numeroContrato": { "type": "string" },
+        "descricaoServico": { "type": "string" },
+        "valorMensal": { "type": "number" },
+        "dataInicio": { "type": "string" },
+        "dataTermino": { "type": "string" },
+        "diaFaturamento": { "type": "integer" },
+        "diaVencimento": { "type": "integer" },
+        "tipoCobranca": { "type": "string", "enum": ["Mensal", "Bimestral", "Trimestral", "Semestral", "Anual"] },
+        "status": { "type": "string", "enum": ["Ativo", "Suspenso", "Encerrado"] },
+        "observacoes": { "type": "string" },
+        "faturamentosGerados": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clienteId", "clienteNome", "numeroContrato", "valorMensal", "diaFaturamento", "diaVencimento", "tipoCobranca", "status"]
+    },
+    "Tarefa": {
+      "title": "Tarefa",
+      "description": "Tarefa ou meta diária atrelada a um colaborador",
+      "type": "object",
+      "properties": {
+        "titulo": { "type": "string" },
+        "descricao": { "type": "string" },
+        "funcionarioId": { "type": "string" },
+        "funcionarioNome": { "type": "string" },
+        "equipe": { "type": "string" },
+        "tipo": { "type": "string", "enum": ["checklist", "quantidade", "financeiro", "automatica"] },
+        "tipoAutomatico": { "type": "string", "enum": ["criar_proposta", "fechar_venda", "abrir_chamado", "emitir_nf"] },
+        "prioridade": { "type": "string", "enum": ["Baixa", "Média", "Alta"] },
+        "dataInicial": { "type": "string" },
+        "dataFinal": { "type": "string" },
+        "horario": { "type": "string" },
+        "repeticao": { "type": "string", "enum": ["Não repetir", "Diariamente", "Semanalmente", "Mensalmente", "Dias específicos"] },
+        "status": { "type": "string", "enum": ["Pendente", "Em andamento", "Concluída", "Cancelada"] },
+        "percentualConcluido": { "type": "number" },
+        "metaQuantidade": { "type": "number" },
+        "realizadoQuantidade": { "type": "number" },
+        "metaFinanceira": { "type": "number" },
+        "realizadoFinanceiro": { "type": "number" },
+        "checklist": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["titulo", "funcionarioId", "tipo", "prioridade", "dataInicial", "dataFinal", "status"]
+    }
+  },
+  "firestore": {
+    "/usuarios/{userId}": { "schema": "Usuario", "description": "Perfis de usuários" },
+    "/clientes/{clienteId}": { "schema": "Cliente", "description": "Empresas clientes" },
+    "/leads/{leadId}": { "schema": "Lead", "description": "Leads comerciais" },
+    "/propostas/{propostaId}": { "schema": "Proposta", "description": "Propostas comerciais" },
+    "/chamados/{chamadoId}": { "schema": "Chamado", "description": "Chamados de suporte" },
+    "/acoes_comerciais/{acaoId}": { "schema": "AcaoComercial", "description": "Ações comerciais" },
+    "/motivos_perda/{motivoId}": { "schema": "MotivoPerda", "description": "Motivos de perda" },
+    "/agenda_comercial/{taskId}": { "schema": "AgendaComercial", "description": "Agenda comercial" },
+    "/metas/{metaId}": { "schema": "Meta", "description": "Metas comerciais" },
+    "/unidades/{unidadeId}": { "schema": "Unidade", "description": "Unidades dos clientes" },
+    "/tecnicos/{tecnicoId}": { "schema": "Tecnico", "description": "Técnicos de suporte" },
+    "/equipamentos/{eqId}": { "schema": "Equipamento", "description": "Catálogo de equipamentos" },
+    "/equipamentos_cliente/{eqId}": { "schema": "EquipamentoCliente", "description": "Equipamentos dos clientes" },
+    "/produtos/{produtoId}": { "schema": "Produto", "description": "Catálogo de produtos comerciais" },
+    "/reminders/{reminderId}": { "schema": "Reminder", "description": "Lembretes de suporte" },
+    "/notifications/{notifId}": { "schema": "Notification", "description": "Notificações do sistema" },
+    "/conversations/{convId}": { "schema": "Conversation", "description": "Conversas de atendimento" },
+    "/conversations/{convId}/messages/{msgId}": { "schema": "ChatMessage", "description": "Mensagens da conversa" },
+    "/whatsapp_config/{configId}": { "schema": "WhatsAppConfig", "description": "Configuração WhatsApp" },
+    "/whatsapp_templates/{templateId}": { "schema": "WhatsAppTemplate", "description": "Templates WhatsApp" },
+    "/satisfaction_surveys/{surveyId}": { "schema": "SatisfactionSurvey", "description": "Pesquisas de satisfação" },
+    "/satisfactionReviews/{reviewId}": { "schema": "SatisfactionReview", "description": "Avaliações de satisfação" },
+    "/access_logs/{logId}": { "schema": "AccessLog", "description": "Logs de acesso" },
+    "/documentos/{docId}": { "schema": "Documento", "description": "Arquivos de clientes" },
+    "/contas_pagar/{contaId}": { "schema": "ContaPagar", "description": "Contas a pagar e despesas financeiras" },
+    "/prospectionCampaigns/{id}": { "schema": "ProspectionCampaign", "description": "Campanhas de prospecção real" },
+    "/prospectionLeads/{id}": { "schema": "ProspectionLead", "description": "Leads de prospecção real" },
+    "/prospectionMessages/{id}": { "schema": "ProspectionMessage", "description": "Mensagens de prospecção real" },
+    "/contratos/{contratoId}": { "schema": "ContratoRecorrente", "description": "Contratos recorrentes de mensalidade de clientes" },
+    "/tarefas/{tarefaId}": { "schema": "Tarefa", "description": "Tarefas e metas de funcionários" },
+    "/modelos_tarefas/{modeloId}": { "schema": "ModeloTarefa", "description": "Modelos de tarefas recorrentes" },
+    "/historico_tarefas/{histId}": { "schema": "TarefaHistoricoDiario", "description": "Histórico diário de conclusão de tarefas" },
+    "/pontuacao_tarefas/{pontId}": { "schema": "PontuacaoUsuario", "description": "Pontuação e ranking dos colaboradores" },
+    "/logs_tarefas/{logId}": { "schema": "TarefaLog", "description": "Logs de ações em tarefas" }
+  }
+}
