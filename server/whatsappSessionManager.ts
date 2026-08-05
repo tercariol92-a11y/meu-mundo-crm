@@ -149,7 +149,7 @@ export async function getSessionProfilePicture(uid:string,rawJid:string,force=fa
   const queryValue=isGroup?jid:phone;
   let snapshot:any=null;
   const safeContactId=String(contactId||'').replace(/^group:/,'').trim();
-  if(safeContactId){const direct=await collection.doc(safeContactId).get();if(direct.exists&&direct.data()?.whatsappSessionId===s.sessionId)snapshot=direct}
+  if(safeContactId){const direct=await collection.doc(safeContactId).get();const directData=direct.data();if(direct.exists&&(directData?.whatsappSessionId===s.sessionId||directData?.sessionId===s.sessionId))snapshot=direct}
   if(!snapshot){const sessionDocuments=await collection.where('whatsappSessionId','==',s.sessionId).get();snapshot=sessionDocuments.docs.find((document:any)=>document.data()?.[queryField]===queryValue)||null}
   if(!snapshot) snapshot=null;
   const ref=snapshot?.ref||(isGroup?collection.doc(groupDocId(s.sessionId,jid)):collection.doc());
@@ -165,16 +165,16 @@ export async function getSessionProfilePicture(uid:string,rawJid:string,force=fa
       if(code===401||code===403||code===404)return undefined;
       throw error;
     });
-    const baseFields={firebaseUid:uid,sessionId:s.sessionId,whatsappSessionId:s.sessionId,connectedPhone:s.phone,contactId:ref.id,jid,phone,contactName:current.nome||current.name||current.subject||current.pushName||(isGroup?'Grupo WhatsApp':'Contato WhatsApp'),profilePictureUpdatedAt:FieldValue.serverTimestamp()};
+    const baseFields={firebaseUid:uid,sessionId:s.sessionId,whatsappSessionId:s.sessionId,connectedPhone:s.phone,contactId:ref.id,contactJid:jid,jid,phone,contactName:current.nome||current.name||current.subject||current.pushName||(isGroup?'Grupo WhatsApp':'Contato WhatsApp'),profilePictureUpdatedAt:FieldValue.serverTimestamp(),profilePictureLastCheckedAt:FieldValue.serverTimestamp()};
     if(!temporaryUrl){
-      await ref.set(baseFields,{merge:true});
+      await ref.set({...baseFields,profilePictureStatus:'unavailable'},{merge:true});
       console.log('[PROFILE PICTURE RESULT]',{jid,found:false,stored:false});
       return null;
     }
     const response=await fetch(temporaryUrl);
     if(!response.ok){
       if([401,403,404].includes(response.status)){
-        await ref.set(baseFields,{merge:true});
+        await ref.set({...baseFields,profilePictureStatus:'unavailable'},{merge:true});
         console.log('[PROFILE PICTURE RESULT]',{jid,found:false,stored:false});
         return null;
       }
@@ -184,7 +184,7 @@ export async function getSessionProfilePicture(uid:string,rawJid:string,force=fa
     const contentType=response.headers.get('content-type')||'image/jpeg';
     const safeJid=jid.replace(/[^A-Za-z0-9@._-]/g,'_');
     const stored=await persistPublicFile(buffer,`whatsapp-sessions/${uid}/${s.sessionId}/profile-pictures/${safeJid}.jpg`,contentType,{jid,phone,origem:'WhatsApp QR Code',ownerUserId:uid,sessionId:s.sessionId});
-    await ref.set({...baseFields,profilePictureUrl:stored.mediaUrl},{merge:true});
+    await ref.set({...baseFields,profilePictureUrl:stored.mediaUrl,profilePictureStoragePath:`whatsapp-sessions/${uid}/${s.sessionId}/profile-pictures/${safeJid}.jpg`,profilePictureStatus:'ready'},{merge:true});
     console.log('[PROFILE PICTURE RESULT]',{jid,found:true,stored:true});
     return stored.mediaUrl;
   }catch(error){

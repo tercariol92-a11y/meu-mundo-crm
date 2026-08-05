@@ -220,16 +220,16 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
     requestedProfilePictures.current.clear();
   }, [activeSessionId]);
 
-  const requestConversationAvatar = useCallback(async (conversation: Conversation) => {
-    if (!activeSessionId || getConversationAvatar(conversation)) return;
+  const requestConversationAvatar = useCallback(async (conversation: Conversation, refresh = false) => {
+    if (!activeSessionId || (!refresh && getConversationAvatar(conversation))) return;
     const rawJid = String(conversation.remoteJid || conversation.lead?.whatsappJid || conversation.lead?.profilePictureJid || conversation.phone || '').trim();
     const contactId = String(conversation.isGroup ? (conversation.groupId || conversation.id) : (conversation.leadId || conversation.lead?.id || conversation.id)).replace(/^group:/, '');
     if (!rawJid || !contactId) return;
-    const cacheKey = `${user.id}:${activeSessionId}:${contactId}`;
+    const cacheKey = `${user.id}:${activeSessionId}:${contactId}:${refresh ? 'refresh' : 'cached'}`;
     if (requestedProfilePictures.current.has(cacheKey)) return;
     requestedProfilePictures.current.add(cacheKey);
     try {
-      const result = await whatsappApi.getProfilePicture(rawJid, { sessionId: activeSessionId, contactId });
+      const result = await whatsappApi.getProfilePicture(rawJid, { refresh, sessionId: activeSessionId, contactId });
       const profilePictureUrl = String(result?.profilePictureUrl || '').trim();
       if (!profilePictureUrl) return;
       setConversations(current => current.map(item => {
@@ -1171,6 +1171,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                     name={conv.contactName} 
                     size="md" 
                     editable={false} 
+                    onImageError={() => void requestConversationAvatar(conv, true)}
                     className={selectedId === conv.id ? 'border-primary/20 shadow-md' : ''}
                   />
                   {conv.channel === 'whatsapp' && (
@@ -1278,6 +1279,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                     <ContactAvatarUploader 
                       leadId={selectedConversation.leadId || ''} 
                       photoURL={getConversationAvatar(selectedConversation)} 
+                      onImageError={() => void requestConversationAvatar(selectedConversation, true)}
                       name={selectedConversation.contactName} 
                       size="sm" 
                       editable={!selectedConversation.isGroup}
@@ -1778,6 +1780,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                   <ContactAvatarUploader 
                     leadId={selectedConversation.leadId || ''} 
                     photoURL={getAvatarUrl(selectedConversation.lead)} 
+                    onImageError={() => void requestConversationAvatar(selectedConversation, true)}
                     name={selectedConversation.contactName} 
                     size="xl" 
                     className="mb-4"
@@ -2595,6 +2598,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                   <ContactAvatarUploader 
                     leadId={selectedConversation.leadId || ''} 
                     photoURL={getAvatarUrl(selectedConversation.lead)} 
+                    onImageError={() => void requestConversationAvatar(selectedConversation, true)}
                     name={selectedConversation.lead.nome} 
                     size="xl" 
                   />

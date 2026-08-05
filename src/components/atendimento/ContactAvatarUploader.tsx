@@ -11,6 +11,7 @@ interface ContactAvatarUploaderProps {
   editable?: boolean;
   className?: string;
   inputId?: string;
+  onImageError?: () => void;
 }
 
 export default function ContactAvatarUploader({ 
@@ -20,7 +21,8 @@ export default function ContactAvatarUploader({
   size = 'md', 
   editable = true,
   className = '',
-  inputId
+  inputId,
+  onImageError
 }: ContactAvatarUploaderProps) {
   const [uploading, setUploading] = useState(false);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
@@ -102,7 +104,10 @@ export default function ContactAvatarUploader({
             draggable={false}
             loading="lazy"
             referrerPolicy="no-referrer"
-            onError={() => setImageFailed(true)}
+            onError={() => {
+              setImageFailed(true);
+              onImageError?.();
+            }}
           />
         ) : (
           <span className="avatar-initial font-black select-none">{initials}</span>
