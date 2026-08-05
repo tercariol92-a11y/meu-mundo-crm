@@ -1835,7 +1835,7 @@ export const databaseService = {
           groupId: groupDoc.id,
           remoteJid: group.remoteJid,
           participantsCount: group.participantsCount || 0,
-          groupPhotoUrl: group.groupPhotoUrl || group.photoUrl || group.avatarUrl || ''
+          groupPhotoUrl: group.profilePictureUrl || group.groupPhotoUrl || group.profilePicture || group.photoUrl || group.avatarUrl || group.picture || ''
         } as Conversation;
       });
       emit();

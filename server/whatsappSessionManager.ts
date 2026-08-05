@@ -6,7 +6,7 @@ import path from 'path';
 import fs from 'fs';
 import { randomUUID } from 'crypto';
 import { FieldValue } from 'firebase-admin/firestore';
-import type { Bucket } from 'firebase-admin/storage';
+import type { Bucket } from '@google-cloud/storage';
 import { createSatisfactionRequest, detectSatisfactionScore, hasPendingSatisfactionRequest, processSatisfactionResponse } from './satisfactionService';
 
 export type SessionStatus = 'disconnected'|'connecting'|'qrcode'|'connected'|'error';
@@ -90,7 +90,7 @@ function timestampMillis(value: any): number {
 async function refreshContactAvatar(s: WhatsAppSession, msg: any, phone: string, leadData: any) {
   if (msg.key.fromMe || !s.socket) return {};
   const updatedAt = timestampMillis(leadData?.profilePictureUpdatedAt);
-  if (leadData?.profilePictureUrl && Date.now() - updatedAt < 24 * 60 * 60 * 1000) return {};
+  if (updatedAt && Date.now() - updatedAt < 24 * 60 * 60 * 1000) return {};
 
   const candidates = [msg.key.remoteJidAlt, msg.key.remoteJid, msg.key.participant, `${phone}@s.whatsapp.net`]
     .map(value => String(value || '').trim())
@@ -111,9 +111,10 @@ async function refreshContactAvatar(s: WhatsAppSession, msg: any, phone: string,
       console.log(`[WhatsApp Avatar] foto salva; JID=${jid}; telefone=${phone}`);
       return {
         profilePictureUrl: permanentUrl,
-        photoUrl: permanentUrl,
-        avatarUrl: permanentUrl,
-        profilePictureUpdatedAt: FieldValue.serverTimestamp()
+        profilePictureUpdatedAt: FieldValue.serverTimestamp(),
+        profilePictureJid: jid,
+        jid,
+        phone
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'indisponível';
@@ -121,6 +122,74 @@ async function refreshContactAvatar(s: WhatsAppSession, msg: any, phone: string,
     }
   }
   return { profilePictureUpdatedAt: FieldValue.serverTimestamp() };
+}
+
+function normalizeProfileJid(rawJid:string){
+  const value=decodeURIComponent(String(rawJid||'').trim());
+  if(!value)throw new Error('INVALID_PROFILE_JID');
+  if(value==='status@broadcast'||value.includes('newsletter'))throw new Error('INVALID_PROFILE_JID');
+  if(value.endsWith('@g.us')||value.endsWith('@s.whatsapp.net'))return value;
+  const phone=phoneOf(value);
+  if(!phone)throw new Error('INVALID_PROFILE_JID');
+  return `${phone}@s.whatsapp.net`;
+}
+
+export async function getSessionProfilePicture(uid:string,rawJid:string,force=false){
+  const s=getWhatsAppSession(uid);
+  if(!s?.socket||s.status!=='connected')throw new Error('WHATSAPP_SESSION_DISCONNECTED');
+  const jid=normalizeProfileJid(rawJid);
+  const isGroup=jid.endsWith('@g.us');
+  const phone=phoneOf(jid);
+  const collectionName=isGroup?'whatsapp_groups':'leads';
+  const collection=db.collection(collectionName);
+  const queryField=isGroup?'remoteJid':'telefone';
+  const queryValue=isGroup?jid:phone;
+  const owned=await collection.where('whatsappOwnerUserId','==',uid).where(queryField,'==',queryValue).limit(1).get();
+  let snapshot=owned.empty?null:owned.docs[0];
+  if(!snapshot){
+    const legacy=await collection.where(queryField,'==',queryValue).limit(5).get();
+    snapshot=legacy.docs.find((document:any)=>!document.data()?.whatsappOwnerUserId||document.data()?.whatsappOwnerUserId===uid)||null;
+  }
+  const ref=snapshot?.ref||(isGroup?collection.doc(groupDocId(uid,jid)):collection.doc());
+  const current=snapshot?.data()||{};
+  const cachedUrl=String(current.profilePictureUrl||current.groupPhotoUrl||current.profilePicture||current.avatarUrl||current.photoUrl||current.picture||'').trim();
+  const updatedAt=timestampMillis(current.profilePictureUpdatedAt);
+  const cacheExpired=!updatedAt||Date.now()-updatedAt>=24*60*60*1000;
+  console.log('[PROFILE PICTURE LOOKUP]',{uid,jid,hasCachedUrl:Boolean(cachedUrl),cacheExpired});
+  if(!force&&!cacheExpired)return cachedUrl||null;
+  try{
+    const temporaryUrl=await s.socket.profilePictureUrl(jid,'image').catch((error:any)=>{
+      const code=Number(error?.output?.statusCode||error?.status||0);
+      if(code===401||code===403||code===404)return undefined;
+      throw error;
+    });
+    const baseFields={jid,phone,contactName:current.nome||current.name||current.subject||current.pushName||(isGroup?'Grupo WhatsApp':'Contato WhatsApp'),profilePictureUpdatedAt:FieldValue.serverTimestamp()};
+    if(!temporaryUrl){
+      await ref.set(baseFields,{merge:true});
+      console.log('[PROFILE PICTURE RESULT]',{jid,found:false,stored:false});
+      return null;
+    }
+    const response=await fetch(temporaryUrl);
+    if(!response.ok){
+      if([401,403,404].includes(response.status)){
+        await ref.set(baseFields,{merge:true});
+        console.log('[PROFILE PICTURE RESULT]',{jid,found:false,stored:false});
+        return null;
+      }
+      throw new Error(`PROFILE_DOWNLOAD_HTTP_${response.status}`);
+    }
+    const buffer=Buffer.from(await response.arrayBuffer());
+    const contentType=response.headers.get('content-type')||'image/jpeg';
+    const safeJid=jid.replace(/[^A-Za-z0-9@._-]/g,'_');
+    const stored=await persistPublicFile(buffer,`whatsapp-profile-pictures/${uid}/${safeJid}.jpg`,contentType,{jid,phone,origem:'WhatsApp QR Code',ownerUserId:uid});
+    await ref.set({...baseFields,profilePictureUrl:stored.mediaUrl},{merge:true});
+    console.log('[PROFILE PICTURE RESULT]',{jid,found:true,stored:true});
+    return stored.mediaUrl;
+  }catch(error){
+    const errorCode=error instanceof Error?error.message:'PROFILE_LOOKUP_FAILED';
+    console.error('[PROFILE PICTURE ERROR]',{jid,errorCode});
+    throw error;
+  }
 }
 async function onMessage(s:WhatsAppSession,msg:any){const jid=msg.key.remoteJid||'';if(jid==='status@broadcast'||jid.includes('newsletter'))return;const isGroup=jid.endsWith('@g.us');if(!isGroup&&!jid.endsWith('@s.whatsapp.net')&&!jid.endsWith('@lid'))return;const x=extract(msg.message);if(!x)return;const id=msg.key.id||`msg-${Date.now()}`;const o=await owner(s.userId);if(isGroup){const meta=await s.socket!.groupMetadata(jid);const gid=groupDocId(s.userId,jid);const ref=db.collection('whatsapp_groups').doc(gid);const mref=ref.collection('messages').doc(id);if((await mref.get()).exists)return;const participant=msg.key.participant||msg.participant||'';const pname=msg.key.fromMe?'WhatsApp Web':msg.pushName||phoneOf(participant)||'Participante';const media=await saveMedia(s,msg,`group-${gid}`,id);await mref.set({messageId:id,remoteJid:jid,groupId:gid,groupName:meta.subject,isGroup:true,participantJid:participant,participantPhone:phoneOf(participant),participantName:pname,body:x.body,mensagem:x.body,type:x.type,direction:msg.key.fromMe?'out':'in',fromMe:!!msg.key.fromMe,status:msg.key.fromMe?'sent':'received',ownerUserId:s.userId,whatsappOwnerUserId:s.userId,whatsappSessionId:s.userId,sessionPhone:s.phone,sentByUserId:null,...media,timestamp:FieldValue.serverTimestamp(),createdAt:FieldValue.serverTimestamp()});await ref.set({groupId:gid,groupJid:jid,remoteJid:jid,name:meta.subject,subject:meta.subject,participantsCount:meta.participants.length,isGroup:true,ownerUserId:s.userId,whatsappOwnerUserId:s.userId,whatsappSessionId:s.userId,sessionPhone:s.phone,lastMessage:`${pname}: ${x.body}`,lastMessageAt:FieldValue.serverTimestamp(),lastMessageId:id,...(!msg.key.fromMe?{unreadCount:FieldValue.increment(1)}:{}),updatedAt:FieldValue.serverTimestamp()},{merge:true});return}
 const raw=jid.endsWith('@lid')?(msg.key.remoteJidAlt||''):jid;if(!raw.endsWith('@s.whatsapp.net'))return;const phone=phoneOf(raw);const leads=db.collection('leads');const q=await leads.where('whatsappOwnerUserId','==',s.userId).where('telefone','==',phone).limit(1).get();const ref=q.empty?leads.doc():q.docs[0].ref;const mref=ref.collection('messages').doc(id);if((await mref.get()).exists)return;const media=await saveMedia(s,msg,phone,id);await mref.set({messageId:id,metaMessageId:id,telefone:phone,phone,body:x.body,mensagem:x.body,type:x.type,direction:msg.key.fromMe?'out':'in',fromMe:!!msg.key.fromMe,status:msg.key.fromMe?'sent':'received',ownerUserId:s.userId,whatsappOwnerUserId:s.userId,whatsappSessionId:s.userId,sessionPhone:s.phone,sentByUserId:null,...media,timestamp:FieldValue.serverTimestamp(),createdAt:FieldValue.serverTimestamp()});await ref.set({nome:msg.pushName||'Contato WhatsApp',telefone:phone,phone,whatsapp:phone,channel:'whatsapp_qr',ownerUserId:s.userId,ownerUserName:o.name,ownerUserEmail:o.email,whatsappOwnerUserId:s.userId,whatsappSessionId:s.userId,sessionPhone:s.phone,assignedUserId:s.userId,assignedUserName:o.name,ultimaMensagem:x.body,lastMessage:x.body,lastMessageAt:FieldValue.serverTimestamp(),lastMessageId:id,...(!msg.key.fromMe?{unreadCount:FieldValue.increment(1)}:{}),updatedAt:FieldValue.serverTimestamp(),status:'Em atendimento'},{merge:true});if(!msg.key.fromMe&&x.type==='text'){await processSatisfactionResponse(db,{phone,sessionOwnerUid:s.userId,messageId:id,text:x.body,leadId:ref.id,sendAcknowledgement:(text)=>sendSessionMessage(s.userId,phone,text)})}}
@@ -314,4 +383,3 @@ export async function sendSessionMedia(uid:string,destination:string,buffer:Buff
   console.log('[MEDIA FIRESTORE SAVE]',{documentId:messageRef.id,messageId,mediaUrl:stored?.mediaUrl||'',type,mediaStatus});
   return{success:true,delivered:true,messageId,chatId,jid:chatId,remoteJid:chatId,canonicalPhone:phone,type,caption,mimeType:mimetype,mimetype,fileName:safeFileName,fileSize:buffer.length,mediaUrl:stored?.mediaUrl||'',thumbnailUrl:type==='image'?(stored?.mediaUrl||''):'',storagePath,timestamp:Date.now(),status:'sent',mediaStatus,mediaError};
 }
-export async function getSessionProfilePicture(uid:string,jid:string){const s=getWhatsAppSession(uid);if(!s?.socket||s.status!=='connected')throw new Error('Sessão WhatsApp do usuário desconectada.');const cleanJid=String(jid||'').trim();if(!cleanJid||cleanJid.includes('newsletter')||cleanJid==='status@broadcast'||cleanJid.endsWith('@g.us'))throw new Error('JID de contato inválido.');return await s.socket.profilePictureUrl(cleanJid,'image')}

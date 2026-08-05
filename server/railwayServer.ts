@@ -121,7 +121,16 @@ app.post('/api/whatsapp/send-media', (req, res, next) => {
   busboy.on('error',next);req.pipe(busboy);
 });
 
-app.get('/api/whatsapp/profile-picture/:jid', async (req,res,next) => { try { const url=await getSessionProfilePicture(uidOf(req),decodeURIComponent(req.params.jid));res.json({success:true,profilePictureUrl:url}); } catch(error){next(error)} });
+app.get('/api/whatsapp/profile-picture/:jid', async (req,res,next) => {
+  try {
+    const url=await getSessionProfilePicture(uidOf(req),req.params.jid,req.query.refresh==='true');
+    res.json({success:true,profilePictureUrl:url});
+  } catch(error) {
+    const code=error instanceof Error?error.message:'';
+    if(code==='INVALID_PROFILE_JID')return res.status(400).json({success:false,error:'JID inválido.'});
+    next(error);
+  }
+});
 
 app.use('/api', (req,res) => res.status(404).json({success:false,error:`Endpoint ${req.method} ${req.path} não encontrado.`}));
 app.use((error:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{console.error('[Railway WhatsApp] erro:',error instanceof Error?error.message:'erro desconhecido');res.status(500).json({success:false,error:error instanceof Error?error.message:'Falha interna no serviço WhatsApp.'})});

@@ -105,6 +105,13 @@ export const whatsappApi = {
     }));
   },
 
+  async getProfilePicture(jid: string, refresh = false) {
+    const normalizedJid = String(jid || '').trim();
+    if (!normalizedJid) return { success: true, profilePictureUrl: null };
+    const suffix = refresh ? '?refresh=true' : '';
+    return parseResponse(await authenticatedRequest(`/api/whatsapp/profile-picture/${encodeURIComponent(normalizedJid)}${suffix}`));
+  },
+
   resolveMediaUrl(message: any): string | null {
     const value = String(message?.mediaUrl || message?.imageUrl || message?.fileUrl || message?.downloadUrl || message?.url || '').trim();
     if (!value) return null;

@@ -140,7 +140,8 @@ export function safeFormatTime(value: any, formatStr: string = 'HH:mm', options?
 }
 
 function getAvatarUrl(lead?: Lead) {
-  return lead?.profilePictureUrl || lead?.photoUrl || lead?.avatarUrl || lead?.fotoPerfil || null;
+  const compatible = lead as (Lead & { profilePicture?: string; picture?: string }) | undefined;
+  return compatible?.profilePictureUrl || compatible?.profilePicture || compatible?.avatarUrl || compatible?.photoUrl || compatible?.whatsappPhotoUrl || compatible?.fotoPerfil || compatible?.picture || null;
 }
 
 function dateLabel(value: any) {
@@ -212,19 +213,17 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
   const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('soundNotificationsEnabled') !== 'false');
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [highlightedConversation, setHighlightedConversation] = useState<string | null>(null);
+  const requestedProfilePictures = useRef(new Set<string>());
 
   useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
 
   useEffect(() => {
-    conversations.forEach(({ lead }) => {
-      if (!lead) return;
-      console.log('[Avatar Frontend]', {
-        id: lead.id,
-        nome: lead.nome,
-        profilePictureUrl: lead.profilePictureUrl,
-        photoUrl: lead.photoUrl,
-        avatarUrl: lead.avatarUrl
-      });
+    conversations.slice(0, 30).forEach(conversation => {
+      if (getConversationAvatar(conversation)) return;
+      const rawJid = String(conversation.remoteJid || conversation.lead?.whatsappJid || conversation.lead?.profilePictureJid || conversation.phone || '');
+      if (!rawJid || requestedProfilePictures.current.has(rawJid)) return;
+      requestedProfilePictures.current.add(rawJid);
+      void whatsappApi.getProfilePicture(rawJid).catch(() => undefined);
     });
   }, [conversations]);
 
@@ -301,6 +300,14 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
     conversations.find(c => c.id === selectedId),
     [conversations, selectedId]
   );
+
+  useEffect(() => {
+    if (!selectedConversation || getConversationAvatar(selectedConversation)) return;
+    const rawJid = String(selectedConversation.remoteJid || selectedConversation.lead?.whatsappJid || selectedConversation.lead?.profilePictureJid || selectedConversation.phone || '');
+    if (!rawJid || requestedProfilePictures.current.has(rawJid)) return;
+    requestedProfilePictures.current.add(rawJid);
+    void whatsappApi.getProfilePicture(rawJid).catch(() => undefined);
+  }, [selectedConversation]);
   
   // Keep track of the selected lead phone explicitly
   const selectedPhoneRef = useRef<string | null>(null);
