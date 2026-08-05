@@ -78,7 +78,7 @@ export async function proxyWhatsAppRequest(
       });
     }
 
-    const target = new URL(`/api/whatsapp/qr/${options.upstreamAction}`, baseUrl);
+    const target = new URL(`/api/whatsapp/qr/${options.upstreamAction}`, baseUrl.toString());
     const internalSecret = process.env.WHATSAPP_INTERNAL_SECRET?.trim();
     if (!internalSecret) {
       return json(503, {

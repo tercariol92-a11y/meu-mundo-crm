@@ -36,7 +36,7 @@ export default async function handler(req: RequestLike, res: ResponseLike) {
 
     let target: URL;
     try {
-      target = new URL('/api/whatsapp/send-media', new URL(serviceUrl));
+      target = new URL('/api/whatsapp/send-media', new URL(serviceUrl).toString());
     } catch {
       return json(503, { success: false, code: 'INVALID_WHATSAPP_SERVICE_URL', error: 'A variável WHATSAPP_SERVICE_URL não contém uma URL válida.' });
     }
