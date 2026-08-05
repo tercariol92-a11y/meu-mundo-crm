@@ -409,7 +409,33 @@ export const reconnectWhatsApp=(uid:string)=>connectWhatsApp(uid,true);
 export function getWhatsAppStatus(uid:string){const s=getWhatsAppSession(uid);return s?{uid,sessionId:s.sessionId,connectedPhone:s.phone,status:s.status,sessionName:`whatsapp_${s.sessionId}`,sessionPhone:s.phone,qrCodeDataUrl:s.qrCodeDataUrl,lastConnectedAt:s.lastConnectedAt}:{uid,sessionId:'',connectedPhone:'',status:'disconnected',sessionName:'',sessionPhone:'',qrCodeDataUrl:'',lastConnectedAt:null}}
 export function listWhatsAppSessions(){return[...sessions.values()].map(s=>({userId:s.userId,...getWhatsAppStatus(s.userId)}))}
 export async function initializeExistingSessions(){if(!fs.existsSync(ROOT))return;for(const e of await fs.promises.readdir(ROOT,{withFileTypes:true}))if(e.isDirectory()&&/^[A-Za-z0-9_-]{6,128}$/.test(e.name))void connectWhatsApp(e.name)}
-export async function sendSessionMessage(uid:string,destination:string,text:string){const s=getWhatsAppSession(uid);if(!s?.socket||s.status!=='connected')throw new Error('Sessão WhatsApp do usuário desconectada.');const jid=destination.endsWith('@g.us')?destination:`${destination.replace(/\D/g,'')}@s.whatsapp.net`;const sent=await s.socket.sendMessage(jid,{text});return{success:true,messageId:sent?.key.id,jid,remoteJid:jid,messages:[{id:sent?.key.id}]}}
+export async function sendSessionMessage(uid:string,destination:string,text:string,context:Record<string,any>={}){
+  const s=getWhatsAppSession(uid);if(!s?.socket||s.status!=='connected')throw new Error('Sessão WhatsApp do usuário desconectada.');
+  const jid=destination.endsWith('@g.us')?destination:`${destination.replace(/\D/g,'')}@s.whatsapp.net`;
+  const cleanText=String(text||'').trim();
+  const attendantName=String(context.attendantName||'').trim();
+  const alreadyIdentified=/^\*[^*\n]+:\*\s*\n/.test(cleanText);
+  const whatsappBody=context.manualFromAtendimento===true&&attendantName&&!alreadyIdentified?`*${attendantName}:*\n${cleanText}`:cleanText;
+  const sent=await s.socket.sendMessage(jid,{text:whatsappBody});
+  const messageId=String(sent?.key.id||'');if(!messageId)throw new Error('O WhatsApp não confirmou o messageId do envio.');
+  if(context.manualFromAtendimento===true){
+    const isGroup=jid.endsWith('@g.us');const phone=phoneOf(jid);const collectionName=isGroup?'whatsapp_groups':'leads';let parentRef:any=null;
+    if(isGroup){parentRef=db.collection(collectionName).doc(context.groupId||groupDocId(s.sessionId,jid))}
+    else if(context.conversationId){const hinted=await db.collection(collectionName).doc(String(context.conversationId)).get();if(hinted.exists&&hinted.data()?.whatsappSessionId===s.sessionId)parentRef=hinted.ref}
+    if(!parentRef){const field=isGroup?'remoteJid':'telefone';const value=isGroup?jid:phone;const match=await db.collection(collectionName).where('whatsappSessionId','==',s.sessionId).where(field,'==',value).limit(1).get();parentRef=match.empty?db.collection(collectionName).doc():match.docs[0].ref}
+    const timestamp=FieldValue.serverTimestamp();
+    await parentRef.collection('messages').doc(messageId).set({
+      firebaseUid:uid,sessionId:s.sessionId,whatsappSessionId:s.sessionId,connectedPhone:s.phone,sessionPhone:s.phone,jid,chatId:jid,
+      messageId,metaMessageId:messageId,conversationId:parentRef.id,telefone:phone,phone,body:cleanText,mensagem:cleanText,text:cleanText,whatsappBody,
+      direction:'out',messageDirection:'outbound',fromMe:true,type:'text',status:'sent',senderType:'user',
+      attendantId:String(context.attendantId||uid),attendantName,attendantEmail:String(context.attendantEmail||''),
+      sentBy:String(context.attendantId||uid),sentByUserId:String(context.attendantId||uid),sentByName:attendantName,
+      sender:attendantName,atendente:attendantName,atendenteNome:attendantName,ownerUserId:uid,whatsappOwnerUserId:uid,timestamp,createdAt:timestamp
+    },{merge:true});
+    await parentRef.set({assignedUserId:String(context.attendantId||uid),assignedUserName:attendantName,lastMessage:cleanText,ultimaMensagem:cleanText,lastMessageId:messageId,lastMessageAt:timestamp,updatedAt:timestamp},{merge:true});
+  }
+  return{success:true,messageId,jid,remoteJid:jid,whatsappBody,messages:[{id:messageId}]}
+}
 export async function sendSessionMedia(uid:string,destination:string,buffer:Buffer,mimetype:string,fileName:string,caption='',context:Record<string,string>={}){
   const s=getWhatsAppSession(uid);
   if(!s?.socket||s.status!=='connected')throw new Error('Sessão WhatsApp do usuário desconectada.');
@@ -462,7 +488,8 @@ export async function sendSessionMedia(uid:string,destination:string,buffer:Buff
     text:caption,body:caption,mensagem:caption,caption,mimetype,mimeType:mimetype,fileName:safeFileName,
     fileSize:buffer.length,mediaUrl:stored?.mediaUrl||'',thumbnailUrl:type==='image'?(stored?.mediaUrl||''):'',storagePath,
     mediaStatus,mediaError,status:'sent',senderId:context.attendantId||uid,attendantId:context.attendantId||uid,
-    attendantName:context.attendantName||'',attendantEmail:context.attendantEmail||'',
+    attendantName:context.attendantName||'',attendantEmail:context.attendantEmail||'',senderType:'user',
+    sentBy:context.attendantId||uid,sentByUserId:context.attendantId||uid,sentByName:context.attendantName||'',sender:context.attendantName||'',atendente:context.attendantName||'',atendenteNome:context.attendantName||'',
     firebaseUid:uid,ownerUserId:uid,whatsappOwnerUserId:uid,whatsappSessionId:s.sessionId,sessionId:s.sessionId,connectedPhone:s.phone,sessionPhone:s.phone,jid:chatId,
     conversationId:context.conversationId||parentRef.id,
     timestamp,createdAt:timestamp

@@ -614,6 +614,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
         attendantId,
         attendantEmail,
         source: 'atendimento',
+        conversationId: selectedConversation.leadId || selectedConversation.id,
         isGroup: Boolean(selectedConversation.isGroup),
         groupId: selectedConversation.groupId
       });
@@ -630,7 +631,8 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
   const handleAssume = async () => {
     if (!selectedId || !selectedConversation) return;
     try {
-      await databaseService.assignConversation(selectedConversation.leadId, user.id);
+      const { attendantName, attendantId } = getAttendantIdentity(user);
+      await databaseService.assignConversation(selectedConversation.leadId, attendantId, attendantName);
     } catch (error) {
       console.error('Error assuming conversation:', error);
     }
@@ -647,7 +649,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
     try {
       setIsFinalizing(true);
       setFinalizeError(null);
-      const attendantName = user.nome || user.email?.split('@')[0] || 'Atendente';
+      const { attendantName } = getAttendantIdentity(user);
       const result = await databaseService.finalizeAtendimento(leadId, attendantName);
       setConversations(current => current.map(conversation => conversation.id === selectedId
         ? { ...conversation, status: 'finalizado' as ConversationStatus, unreadCount: 0 }
@@ -673,7 +675,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
     try {
       setIsFinalizing(true);
       setFinalizeError(null);
-      const attendantName = user.nome || user.email?.split('@')[0] || 'Atendente';
+      const { attendantName } = getAttendantIdentity(user);
       const result = await databaseService.finalizeAtendimento(selectedConversation.leadId, attendantName);
       if (result?.surveySent === false) throw new Error(result.surveyError || 'Não foi possível reenviar a pesquisa.');
       toast.success(result?.surveyAlreadyRequested ? 'Já existe uma pesquisa ativa para este atendimento.' : 'Pesquisa de satisfação reenviada.');
@@ -959,6 +961,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
       formData.append('attendantName', attendantName);
       formData.append('attendantId', attendantId);
       formData.append('attendantEmail', attendantEmail);
+      formData.append('conversationId', selectedConversation.leadId || selectedConversation.id);
       formData.append('manualFromAtendimento', 'true');
       const result = await whatsappApi.sendImage(formData);
       if (!result.success || !result.messageId) {

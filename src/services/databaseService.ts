@@ -1868,10 +1868,15 @@ export const databaseService = {
     }
   },
 
-  async assignConversation(leadId: string, userId: string) {
+  async assignConversation(leadId: string, userId: string, userName: string) {
     try {
       await updateDoc(doc(db, 'leads', leadId), {
         responsavelId: userId,
+        assignedToId: userId,
+        assignedToName: userName,
+        assignedUserId: userId,
+        assignedUserName: userName,
+        assignedAt: serverTimestamp(),
         status: 'Em contato',
         updatedAt: serverTimestamp()
       });

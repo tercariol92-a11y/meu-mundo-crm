@@ -123,7 +123,7 @@ app.post('/api/whatsapp/send', async (req, res, next) => {
 
     const uid = uidOf(req);
     if (input.satisfactionSurvey !== true) {
-      return res.json(await sendSessionMessage(uid, to, message));
+      return res.json(await sendSessionMessage(uid, to, message, input));
     }
 
     const normalizedPhone = to.replace(/\D/g, '');
@@ -169,7 +169,7 @@ app.post('/api/whatsapp/send', async (req, res, next) => {
       if (!leadRef) throw new Error('Lead da pesquisa não encontrado para a sessão autenticada.');
 
       try {
-        const sent = await sendSessionMessage(uid, to, message);
+        const sent = await sendSessionMessage(uid, to, message, input);
         const messageId = String(sent?.messageId || '').trim();
         if (!messageId) throw new Error('O WhatsApp não confirmou o messageId da pesquisa.');
         const requestId = await createSatisfactionRequest(db, {
@@ -177,8 +177,8 @@ app.post('/api/whatsapp/send', async (req, res, next) => {
           clientId: String(input.clientId || leadData.clienteId || ''), clientName: leadData.nome || 'Contato WhatsApp',
           contactPhone: normalizedPhone, atendimentoId: atendimentoId || leadRef.id,
           ticketId: String(input.ticketId || leadData.ticketId || ''),
-          assignedUserId: leadData.assignedUserId || leadData.responsavelId || uid,
-          assignedUserName: leadData.assignedUserName || leadData.atendenteFinalizacao || 'Atendente',
+          assignedUserId: String(input.attendantId || leadData.finalizedByUid || uid),
+          assignedUserName: String(input.attendantName || leadData.finalizedByName || leadData.atendenteFinalizacao || 'Atendente'),
           technicianId: leadData.technicianId || leadData.tecnicoId || '',
           technicianName: leadData.technicianName || leadData.tecnicoNome || leadData.tecnico || '',
           profilePictureUrl: leadData.profilePictureUrl || '', whatsappSessionOwnerUid: uid,
