@@ -21,13 +21,19 @@ const safeUid=(uid:string)=>{if(!/^[A-Za-z0-9_-]{6,128}$/.test(uid))throw new Er
 const sessionIdOf=(uid:string,phone:string)=>`${safeUid(uid)}_${String(phone||'pending').replace(/\D/g,'')||'pending'}`;
 const groupDocId=(sessionId:string,jid:string)=>`${sessionId}_${jid.replace(/@g\.us$/,'').replace(/[^A-Za-z0-9_-]/g,'_')}`;
 const phoneOf=(jid:string)=>jid.split('@')[0].split(':')[0].replace(/\D/g,'');
-async function persistPublicFile(buffer:Buffer,storagePath:string,contentType:string,metadata:Record<string,string>){
+async function persistPublicFile(buffer:Buffer,storagePath:string,contentType:string,metadata:Record<string,string>,useSignedUrl=false){
   const bucket=mediaBucket;
   if(!bucket)throw new Error('FIREBASE_STORAGE_BUCKET_NOT_CONFIGURED');
   const [bucketExists]=await bucket.exists();
   if(!bucketExists)throw new Error('FIREBASE_STORAGE_BUCKET_NOT_FOUND');
   const token=randomUUID();
-  await bucket.file(storagePath).save(buffer,{resumable:false,metadata:{contentType,cacheControl:'public,max-age=31536000,immutable',metadata:{firebaseStorageDownloadTokens:token,...metadata}}});
+  const file=bucket.file(storagePath);
+  await file.save(buffer,{resumable:false,metadata:{contentType,cacheControl:'public,max-age=86400',metadata:{firebaseStorageDownloadTokens:token,...metadata}}});
+  if(useSignedUrl){
+    const [signedUrl]=await file.getSignedUrl({action:'read',expires:Date.now()+7*24*60*60*1000});
+    console.log('[PROFILE PICTURE SIGNED URL]',{storagePath,expiresInDays:7,success:true});
+    return {mediaUrl:signedUrl,storagePath};
+  }
   const mediaUrl=`https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(token)}`;
   console.log('[MEDIA STORAGE UPLOAD]',{storagePath,bucketName:bucket.name,success:true});
   return {mediaUrl,storagePath};
@@ -111,7 +117,7 @@ async function refreshContactAvatar(s: WhatsAppSession, msg: any, phone: string,
       // that header makes browsers refuse the avatar as an <img>.
       const contentType = 'image/jpeg';
       const storagePath = `whatsapp-sessions/${s.userId}/${s.sessionId}/profile-pictures/${phone}.jpg`;
-      const stored=await persistPublicFile(buffer,storagePath,contentType,{telefone:phone,origem:'WhatsApp QR Code',ownerUserId:s.userId});
+      const stored=await persistPublicFile(buffer,storagePath,contentType,{telefone:phone,origem:'WhatsApp QR Code',ownerUserId:s.userId},true);
       const permanentUrl=stored.mediaUrl;
       console.log(`[WhatsApp Avatar] foto salva; JID=${jid}; telefone=${phone}`);
       return {
@@ -188,7 +194,7 @@ export async function getSessionProfilePicture(uid:string,rawJid:string,force=fa
     // temporary CDN's generic application/octet-stream header to Storage.
     const contentType='image/jpeg';
     const safeJid=jid.replace(/[^A-Za-z0-9@._-]/g,'_');
-    const stored=await persistPublicFile(buffer,`whatsapp-sessions/${uid}/${s.sessionId}/profile-pictures/${safeJid}.jpg`,contentType,{jid,phone,origem:'WhatsApp QR Code',ownerUserId:uid,sessionId:s.sessionId});
+    const stored=await persistPublicFile(buffer,`whatsapp-sessions/${uid}/${s.sessionId}/profile-pictures/${safeJid}.jpg`,contentType,{jid,phone,origem:'WhatsApp QR Code',ownerUserId:uid,sessionId:s.sessionId},true);
     await ref.set({...baseFields,profilePictureUrl:stored.mediaUrl,profilePictureStoragePath:`whatsapp-sessions/${uid}/${s.sessionId}/profile-pictures/${safeJid}.jpg`,profilePictureStatus:'ready'},{merge:true});
     console.log('[PROFILE PICTURE RESULT]',{jid,found:true,stored:true});
     return stored.mediaUrl;
