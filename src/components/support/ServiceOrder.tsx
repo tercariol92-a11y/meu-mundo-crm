@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { databaseService } from '../../services/databaseService';
-import { Chamado } from '../../types';
+import { Chamado, User as CRMUser } from '../../types';
 import { 
   X, 
   Save, 
@@ -30,15 +30,18 @@ import { motion, AnimatePresence } from 'framer-motion';
 import SignatureCanvas from 'react-signature-canvas';
 import { CameraCaptureModal } from '../common/CameraCaptureModal';
 import OSPrintViewer from './OSPrintViewer';
+import ServiceOrderPhotoGallery from './ServiceOrderPhotoGallery';
+import { serviceOrderPhotosService } from '../../services/serviceOrderPhotosService';
 
 interface ServiceOrderProps {
   chamadoId: string;
   onClose: () => void;
   onUpdate: () => void;
   onEdit?: (chamado: Chamado) => void;
+  user: CRMUser;
 }
 
-export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit }: ServiceOrderProps) {
+export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, user }: ServiceOrderProps) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -52,6 +55,7 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit }: S
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const sigPad = useRef<SignatureCanvas>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   
@@ -220,27 +224,25 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit }: S
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (files) {
-      const filePromises = Array.from(files).map(file => {
-        return new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.readAsDataURL(file);
-        });
-      });
-
-      try {
-        const base64Files = await Promise.all(filePromises);
-        setFotos(prev => [...prev, ...base64Files]);
-      } catch (err) {
-        console.error('Error reading files:', err);
-      }
-    }
+    if (!files?.length || !chamado) return;
+    setUploadingPhoto(true);
+    try {
+      const uploaded = await Promise.all(Array.from(files).map(file => serviceOrderPhotosService.upload(chamado.id, file, file.name)));
+      const next = [...fotos, ...uploaded.map(item => item.url)];
+      setFotos(next);
+      await databaseService.updateChamado(chamado.id, { fotos: next });
+    } catch (err) {
+      console.error('[SERVICE ORDER PHOTO UPLOAD ERROR]', { orderId: chamado.id, error: err });
+      setError('Não foi possível enviar uma ou mais fotos.');
+    } finally { setUploadingPhoto(false); e.target.value = ''; }
   };
 
-  const removeFoto = (index: number) => {
-    const newFotos = [...fotos];
-    newFotos.splice(index, 1);
+  const removeFoto = async (index: number) => {
+    if (!chamado) return;
+    const target = fotos[index];
+    await serviceOrderPhotosService.remove(target);
+    const newFotos = fotos.filter((_, photoIndex) => photoIndex !== index);
+    await databaseService.updateChamado(chamado.id, { fotos: newFotos });
     setFotos(newFotos);
   };
 
@@ -480,31 +482,14 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit }: S
                     <Camera size={14} /> Tirar Foto (Câmera)
                   </button>
                   <label className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-primary hover:bg-primary/10 border border-primary/25 px-3 py-1.5 rounded-lg transition-all cursor-pointer">
-                    <Image size={14} /> Escolher da Galeria
-                    <input type="file" className="hidden" accept="image/*" multiple onChange={handlePhotoUpload} />
+                    {uploadingPhoto ? <Loader2 size={14} className="animate-spin" /> : <Image size={14} />} Escolher da Galeria
+                    <input type="file" className="hidden" accept="image/*" multiple disabled={uploadingPhoto} onChange={handlePhotoUpload} />
                   </label>
                 </div>
               )}
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {fotos.map((foto, index) => (
-                <div key={index} className="relative aspect-video rounded-2xl overflow-hidden border border-surface-container-high group">
-                  <img src={foto} alt={`OS Foto ${index}`} className="w-full h-full object-cover" />
-                  {chamado.status !== 'concluido' && (
-                    <button 
-                      onClick={() => removeFoto(index)}
-                      className="absolute top-2 right-2 p-1.5 bg-error text-white rounded-lg opacity-0 group-hover:opacity-100 transition-all"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  )}
-                </div>
-              ))}
-              {fotos.length === 0 && (
-                <div className="md:col-span-4 py-8 text-center bg-surface-container-low rounded-2xl border-2 border-dashed border-surface-container-high">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Nenhuma foto registrada.</p>
-                </div>
-              )}
+              <ServiceOrderPhotoGallery orderId={chamado.id} photos={fotos} addedBy={chamado.tecnico?.nome || user.nome || user.displayName} addedAt={chamado.updatedAt || chamado.createdAt} canDelete={user.role === 'admin' || (user.role === 'tecnico' && chamado.tecnicoId === user.id && chamado.status !== 'concluido')} onDelete={removeFoto} />
             </div>
           </div>
 
@@ -656,8 +641,18 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit }: S
     <CameraCaptureModal
       isOpen={isCameraOpen}
       onClose={() => setIsCameraOpen(false)}
-      onCapture={(base64Data) => {
-        setFotos(prev => [...prev, base64Data]);
+      onCapture={async (base64Data) => {
+        if (!chamado) return;
+        setUploadingPhoto(true);
+        try {
+          const uploaded = await serviceOrderPhotosService.uploadDataUrl(chamado.id, base64Data);
+          const next = [...fotos, uploaded.url];
+          setFotos(next);
+          await databaseService.updateChamado(chamado.id, { fotos: next });
+        } catch (photoError) {
+          console.error('[SERVICE ORDER CAMERA PHOTO ERROR]', { orderId: chamado.id, error: photoError });
+          setError('Não foi possível salvar a foto capturada.');
+        } finally { setUploadingPhoto(false); }
       }}
     />
 

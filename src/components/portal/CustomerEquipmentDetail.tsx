@@ -12,7 +12,6 @@ import {
   ArrowLeft,
   ChevronRight,
   Download,
-  Image as ImageIcon,
   Plus,
   Paperclip,
   Check,
@@ -25,6 +24,7 @@ import {
 import { User, EquipamentoCliente, Chamado } from '../../types';
 import { databaseService } from '../../services/databaseService';
 import { motion, AnimatePresence } from 'framer-motion';
+import ServiceOrderPhotoGallery from '../support/ServiceOrderPhotoGallery';
 
 const getTicketStatusLabel = (status: string) => {
   switch (status) {
@@ -447,16 +447,7 @@ export default function CustomerEquipmentDetail({ user, equipmentId, onBack, onO
                               <div>
                                 <p className="text-[9px] font-black uppercase tracking-widest text-primary mb-2">Fotos Liberadas ao Cliente</p>
                                 {ticket.fotos && ticket.fotos.length > 0 ? (
-                                  <div className="flex flex-wrap gap-2">
-                                    {ticket.fotos.map((foto, fidx) => (
-                                      <div key={fidx} className="w-12 h-12 rounded-xl bg-surface-container-highest/20 border border-surface-container-high overflow-hidden group relative cursor-pointer">
-                                        <img src={foto} alt={`Evidência ${fidx}`} className="w-full h-full object-cover transition-transform group-hover:scale-110" referrerPolicy="no-referrer" />
-                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                                          <ImageIcon size={14} className="text-white" />
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
+                                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2"><ServiceOrderPhotoGallery orderId={ticket.id} photos={ticket.fotos} addedBy={ticket.tecnico?.nome} addedAt={ticket.updatedAt || ticket.createdAt} canDelete={false} onDelete={() => undefined} /></div>
                                 ) : (
                                   <p className="text-[11px] text-on-surface-variant italic">Sem fotos registradas</p>
                                 )}

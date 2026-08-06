@@ -360,6 +360,7 @@ export default function SupportView({ user, mode = 'dashboard' }: SupportViewPro
         {selectedChamadoId && (
           <ServiceOrder 
             chamadoId={selectedChamadoId}
+            user={user}
             onClose={() => setSelectedChamadoId(null)}
             onUpdate={fetchData}
             onEdit={(chamado) => {

@@ -24,6 +24,8 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import SignaturePad from './SignaturePad';
 import { CameraCaptureModal } from '../common/CameraCaptureModal';
+import ServiceOrderPhotoGallery from '../support/ServiceOrderPhotoGallery';
+import { serviceOrderPhotosService } from '../../services/serviceOrderPhotosService';
 
 interface TechCallDetailProps {
   callId: string;
@@ -394,37 +396,17 @@ export default function TechCallDetail({ callId, tecnico, onBack, onStatusUpdate
                         onChange={async (e) => {
                           const file = e.target.files?.[0];
                           if (file) {
-                            const reader = new FileReader();
-                            reader.onloadend = async () => {
-                              const base64 = reader.result as string;
-                              const newFotos = [...(call.fotos || []), base64];
-                              await databaseService.updateChamado(call.id, { fotos: newFotos });
-                              setCall({ ...call, fotos: newFotos });
-                            };
-                            reader.readAsDataURL(file);
+                            const uploaded=await serviceOrderPhotosService.upload(call.id,file,file.name);
+                            const newFotos = [...(call.fotos || []), uploaded.url];
+                            await databaseService.updateChamado(call.id, { fotos: newFotos });
+                            setCall({ ...call, fotos: newFotos });
                           }
                         }}
                       />
                     </label>
                   </>
                 )}
-                {call.fotos?.map((f, i) => (
-                  <div key={i} className="relative w-24 h-24 bg-surface-container-high rounded-3xl overflow-hidden shrink-0 shadow-sm group">
-                    <img src={f} alt="Atendimento" className="w-full h-full object-cover" />
-                    {!isFinalized && (
-                      <button 
-                        onClick={async () => {
-                          const newFotos = call.fotos?.filter((_, index) => index !== i);
-                          await databaseService.updateChamado(call.id, { fotos: newFotos });
-                          setCall({ ...call, fotos: newFotos });
-                        }}
-                        className="absolute top-1 right-1 p-1 bg-error text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    )}
-                  </div>
-                ))}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 min-w-full"><ServiceOrderPhotoGallery orderId={call.id} photos={call.fotos || []} addedBy={tecnico.nome} addedAt={call.updatedAt || call.createdAt} canDelete={!isFinalized && call.tecnicoId === tecnico.id} onDelete={async index => { const target=(call.fotos || [])[index]; await serviceOrderPhotosService.remove(target); const newFotos=(call.fotos || []).filter((_, photoIndex)=>photoIndex!==index); await databaseService.updateChamado(call.id,{fotos:newFotos}); setCall({...call,fotos:newFotos}); }} /></div>
               </div>
             </div>
           </div>
@@ -523,7 +505,8 @@ export default function TechCallDetail({ callId, tecnico, onBack, onStatusUpdate
           isOpen={isCameraOpen}
           onClose={() => setIsCameraOpen(false)}
           onCapture={async (base64Data) => {
-            const newFotos = [...(call.fotos || []), base64Data];
+            const uploaded=await serviceOrderPhotosService.uploadDataUrl(call.id,base64Data);
+            const newFotos = [...(call.fotos || []), uploaded.url];
             await databaseService.updateChamado(call.id, { fotos: newFotos });
             setCall({ ...call, fotos: newFotos });
           }}
