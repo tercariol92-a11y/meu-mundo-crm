@@ -211,7 +211,7 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
       let signaturePath = chamado.customerSignaturePath || '';
       if (hasNewSignature && sigPad.current) {
         setSignatureStatus('saving');
-        const signatureData = sigPad.current.getTrimmedCanvas().toDataURL('image/png');
+        const signatureData = sigPad.current.getCanvas().toDataURL('image/png');
         const uploaded = await serviceOrderSignatureService.uploadCustomerSignature(chamado.id, signatureData);
         signatureUrl = uploaded.url;
         signaturePath = uploaded.storagePath;
@@ -234,12 +234,16 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
         customerSignatureMimeType: 'image/png',
         dataFechamento: new Date().toISOString()
       });
+      const persisted = await databaseService.getChamadoById(chamado.id);
+      if (!persisted || persisted.status !== 'concluido' || !persisted.customerSignatureUrl) {
+        throw new Error('A Ordem de Serviço não confirmou a finalização no banco de dados.');
+      }
       onUpdate();
       onClose();
     } catch (err) {
       console.error('[SERVICE ORDER SIGNATURE ERROR]', { orderId: chamado.id, error: err });
       setSignatureStatus('idle');
-      setError('Não foi possível salvar a assinatura. O atendimento não foi finalizado. Tente novamente.');
+      setError(err instanceof Error ? err.message : 'Não foi possível salvar a assinatura. O atendimento não foi finalizado. Tente novamente.');
     } finally {
       setSaving(false);
     }

@@ -1,5 +1,4 @@
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
-import { storage } from '../firebase';
+import { auth } from '../firebase';
 
 export interface StoredServiceOrderSignature {
   url: string;
@@ -21,13 +20,46 @@ export const serviceOrderSignatureService = {
     if (!orderId) throw new Error('Ordem de Serviço inválida para salvar a assinatura.');
     const blob = typeof signature === 'string' ? dataUrlToBlob(signature) : signature;
     if (!blob.size) throw new Error('A assinatura capturada está vazia.');
-    const storagePath = `service-orders/${orderId}/signatures/customer-signature.png`;
-    const signatureRef = ref(storage, storagePath);
-    await uploadBytes(signatureRef, blob, {
-      contentType: 'image/png',
-      cacheControl: 'private,max-age=3600',
-      customMetadata: { orderId, documentType: 'customer-signature' },
-    });
-    return { url: await getDownloadURL(signatureRef), storagePath, mimeType: 'image/png' };
+    const currentUser = auth.currentUser;
+    if (!currentUser) throw new Error('Sua sessão expirou. Entre novamente para finalizar a Ordem de Serviço.');
+    const signatureDataUrl = typeof signature === 'string'
+      ? signature
+      : await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(new Error('Não foi possível preparar a assinatura.'));
+          reader.readAsDataURL(blob);
+        });
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 30000);
+    let response: Response;
+    try {
+      response = await fetch('/api/service-orders/signature', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${await currentUser.getIdToken()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ orderId, signatureDataUrl }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new Error('O salvamento da assinatura excedeu 30 segundos. Tente novamente.');
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+    const payload = await response.json().catch(() => null) as (StoredServiceOrderSignature & { success?: boolean; error?: string }) | null;
+    if (!response.ok || !payload?.url || !payload.storagePath) {
+      throw new Error(payload?.error || `Não foi possível salvar a assinatura (HTTP ${response.status}).`);
+    }
+    return {
+      url: payload.url,
+      storagePath: payload.storagePath,
+      mimeType: 'image/png',
+    };
   },
 };
