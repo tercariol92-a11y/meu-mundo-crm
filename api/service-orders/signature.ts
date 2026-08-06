@@ -16,6 +16,7 @@ type ResponseLike = {
 };
 
 const APP_NAME = 'service-orders-api';
+const DEFAULT_STORAGE_BUCKET = 'backup-mundo-crm';
 
 function getAdminApp() {
   const existing = getApps().find((app) => app.name === APP_NAME);
@@ -24,7 +25,7 @@ function getAdminApp() {
   const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
   const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET?.trim() || 'gen-lang-client-0560295869.firebasestorage.app';
+  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET?.trim() || DEFAULT_STORAGE_BUCKET;
   if (!projectId || !clientEmail || !privateKey) {
     throw new Error('Firebase Admin não está configurado para salvar a assinatura.');
   }
@@ -71,7 +72,10 @@ export default async function handler(req: RequestLike, res: ResponseLike) {
     const buffer = decodePng(signatureDataUrl);
     const storagePath = `service-orders/${orderId}/signatures/customer-signature.png`;
     const downloadToken = randomUUID();
-    const bucket = getStorage(app).bucket();
+    const bucketName = process.env.FIREBASE_STORAGE_BUCKET?.trim() || DEFAULT_STORAGE_BUCKET;
+    const bucket = getStorage(app).bucket(bucketName);
+    const [bucketExists] = await bucket.exists();
+    if (!bucketExists) throw new Error(`O armazenamento da Ordem de Serviço não está disponível (${bucketName}).`);
     await bucket.file(storagePath).save(buffer, {
       resumable: false,
       contentType: 'image/png',
