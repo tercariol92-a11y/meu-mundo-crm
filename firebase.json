@@ -4,11 +4,6 @@
       "database": "ai-studio-deb852ec-3d57-481f-a30e-1461a2294d90",
       "rules": "firestore.rules",
       "indexes": "firestore.indexes.json"
-    },
-    {
-      "database": "(default)",
-      "rules": "firestore.rules",
-      "indexes": "firestore.indexes.json"
     }
   ]
 }
