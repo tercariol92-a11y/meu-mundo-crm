@@ -25,6 +25,7 @@ import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import { databaseService } from '../services/databaseService';
 import FinanceiroContratosRecorrentes from './FinanceiroContratosRecorrentes';
+import { proposalTotals } from '../utils/proposalTotals';
 
 interface FinanceiroContasPagarProps {
   user: Usuario;
@@ -185,7 +186,7 @@ export default function FinanceiroContasPagar({ user, defaultTab = 'dashboard' }
       const d = new Date(dateStr);
       return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
     });
-    const propostasTotalValue = approvedPropostasThisMonth.reduce((acc, p) => acc + p.valor, 0);
+    const propostasTotalValue = approvedPropostasThisMonth.reduce((acc, p) => acc + proposalTotals(p).investimentoInicial, 0);
 
     // 3. Closed Sales Leads this Month
     const wonLeadsThisMonth = leads.filter(l => {

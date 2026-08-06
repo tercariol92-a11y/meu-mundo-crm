@@ -47,6 +47,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { useGlobalData } from '../contexts/GlobalDataContext';
 import { Usuario, Proposta, ContaPagar } from '../types';
+import { proposalTotals } from '../utils/proposalTotals';
 
 export const parseDateSafely = (dateInput: any): Date | null => {
   if (!dateInput) return null;
@@ -197,7 +198,7 @@ export default function ExecutiveDashboardView({ user: propUser }: ExecutiveDash
       if (!d) return false;
       return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
     });
-    const propostasThisMonthSum = approvedProposalsThisMonth.reduce((acc, p) => acc + (Number(p.valor) || 0), 0);
+    const propostasThisMonthSum = approvedProposalsThisMonth.reduce((acc, p) => acc + proposalTotals(p).investimentoInicial, 0);
 
     // Also support leads closed as 'Fechado' this month (treated as revenue if they have no approved proposals)
     const closedLeadsThisMonth = leads.filter(l => {
@@ -252,7 +253,7 @@ export default function ExecutiveDashboardView({ user: propUser }: ExecutiveDash
       if (!d) return false;
       return d.getFullYear() === currentYear;
     });
-    const propostasThisYearSum = approvedProposalsThisYear.reduce((acc, p) => acc + (Number(p.valor) || 0), 0);
+    const propostasThisYearSum = approvedProposalsThisYear.reduce((acc, p) => acc + proposalTotals(p).investimentoInicial, 0);
 
     const closedLeadsThisYear = leads.filter(l => {
       if (l.status !== 'Fechado') return false;

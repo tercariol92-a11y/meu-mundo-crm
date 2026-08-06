@@ -44,6 +44,7 @@ import { useGlobalData } from '../contexts/GlobalDataContext';
 import ExecutiveDashboardView from './ExecutiveDashboardView';
 import AnnualGoalView from './AnnualGoalView';
 import TeamProductivityWidget from './gestao/TeamProductivityWidget';
+import { proposalTotals } from '../utils/proposalTotals';
 
 export const parseDateSafely = (dateInput: any): Date | null => {
   if (!dateInput) return null;
@@ -149,7 +150,7 @@ export default function Dashboard({ user }: DashboardProps) {
       return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
     });
 
-    const oneTimeRevenueThisMonth = acceptedPropostasThisMonth.reduce((acc, p) => acc + (Number(p.valor) || 0), 0) +
+    const oneTimeRevenueThisMonth = acceptedPropostasThisMonth.reduce((acc, p) => acc + proposalTotals(p).investimentoInicial, 0) +
                                     closedLeadsThisMonth.reduce((acc, l) => acc + (Number(l.valorEstimado) || 0), 0);
 
     const faturamentoThisMonth = oneTimeRevenueThisMonth + monthlyRecurringRevenue;
@@ -174,7 +175,7 @@ export default function Dashboard({ user }: DashboardProps) {
       return d.getMonth() === prevMonth && d.getFullYear() === prevYear;
     });
 
-    const oneTimeRevenuePrevMonth = acceptedPropostasPrevMonth.reduce((acc, p) => acc + (Number(p.valor) || 0), 0) +
+    const oneTimeRevenuePrevMonth = acceptedPropostasPrevMonth.reduce((acc, p) => acc + proposalTotals(p).investimentoInicial, 0) +
                                    closedLeadsPrevMonth.reduce((acc, l) => acc + (Number(l.valorEstimado) || 0), 0);
 
     const faturamentoPrevMonth = oneTimeRevenuePrevMonth + monthlyRecurringRevenue;
@@ -334,7 +335,7 @@ export default function Dashboard({ user }: DashboardProps) {
         return isDateInPeriod(dateStr);
       });
  
-    const oneTimeRevenuePropostas = acceptedPropostasInPeriod.reduce((acc, p) => acc + (Number(p.valor) || 0), 0);
+    const oneTimeRevenuePropostas = acceptedPropostasInPeriod.reduce((acc, p) => acc + proposalTotals(p).investimentoInicial, 0);
     const oneTimeRevenueLeads = closedLeadsInPeriod.reduce((acc, l) => {
       const hasApprovedProposal = acceptedPropostasInPeriod.some(p => p.leadId === l.id);
       if (hasApprovedProposal) return acc;
@@ -364,7 +365,7 @@ export default function Dashboard({ user }: DashboardProps) {
     
     const accumulatedPropostasRevenue = data.propostas
       .filter(p => p.status === 'Aprovado' && parseDateSafely(p.dataAprovacao || p.updatedAt || p.createdAt || '')?.getFullYear() === currentYear)
-      .reduce((acc, p) => acc + (Number(p.valor) || 0), 0);
+      .reduce((acc, p) => acc + proposalTotals(p).investimentoInicial, 0);
  
     const accumulatedLeadsRevenue = data.leads
       .filter(l => l.status === 'Fechado' && parseDateSafely(l.dataFechamento || l.updatedAt || l.createdAt || '')?.getFullYear() === currentYear)
@@ -505,7 +506,7 @@ export default function Dashboard({ user }: DashboardProps) {
     const vendasFechadas = data.propostas.filter(p => p.status === 'Aprovado' && isDateInPeriod(p.dataAprovacao || p.updatedAt || p.createdAt)).length;
     const totalPropostas = data.propostas.filter(p => isDateInPeriod(p.createdAt)).length;
     const conversionRate = totalPropostas > 0 ? (vendasFechadas / totalPropostas) * 100 : 0;
-    const pipelineValue = data.propostas.filter(p => ['Rascunho', 'Enviado'].includes(p.status)).reduce((acc, p) => acc + p.valor, 0);
+    const pipelineValue = data.propostas.filter(p => ['Rascunho', 'Enviado'].includes(p.status)).reduce((acc, p) => acc + proposalTotals(p).investimentoInicial, 0);
 
     return { leadsThisMonth: leadsInPeriod, propostasEnviadas, vendasFechadas, conversionRate, pipelineValue };
   }, [data.propostas, data.leads, selectedPeriod, customDateRange]);
@@ -654,7 +655,7 @@ export default function Dashboard({ user }: DashboardProps) {
           const date = new Date(p.dataAprovacao || p.updatedAt || p.createdAt || '');
           return date.getMonth() === index && date.getFullYear() === currentYear;
         })
-        .reduce((acc, p) => acc + p.valor, 0) +
+        .reduce((acc, p) => acc + proposalTotals(p).investimentoInicial, 0) +
         data.leads
         .filter(l => {
           if (l.status !== 'Fechado') return false;

@@ -32,6 +32,7 @@ import { db } from '../firebase';
 import { collection, query, where, getDocs, updateDoc, addDoc, doc } from 'firebase/firestore';
 import { toast } from 'react-hot-toast';
 import { Usuario } from '../types';
+import { proposalTotals } from '../utils/proposalTotals';
 
 interface AnnualGoalViewProps {
   user: any;
@@ -89,7 +90,7 @@ export default function AnnualGoalView({ user }: AnnualGoalViewProps) {
         const d = new Date(dateStr);
         return d.getFullYear() === currentYear && (d.getMonth() + 1) === monthNum;
       });
-      const proposalsValue = proposalsInMonth.reduce((sum, p) => sum + (Number(p.valor) || 0), 0);
+      const proposalsValue = proposalsInMonth.reduce((sum, p) => sum + proposalTotals(p).investimentoInicial, 0);
 
       // 2. Expenses registered in that month
       const expensesInMonth = contasPagar.filter(c => {
