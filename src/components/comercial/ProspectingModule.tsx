@@ -40,6 +40,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import { auth } from '../../firebase';
 
 interface ProspectingModuleProps {
   user: Usuario;
@@ -518,14 +519,31 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
     if (!lead || isSendingWhatsApp) return;
     try {
       setIsSendingWhatsApp(true);
-      const result = await prospectingService.sendManualWhatsApp(lead.id, lead.empresa || lead.nome, lead.telefone || lead.whatsapp || '', whatsAppMessage, user.nome || user.email.split('@')[0], user.id, user.email);
+      const message = whatsAppMessage.trim();
+      if (!message) throw new Error('Escreva uma mensagem antes de enviar.');
+      const selectedTemplate = whatsAppTemplateId ? templates.find(item => item.id === whatsAppTemplateId) : undefined;
+      if (whatsAppTemplateId && (!selectedTemplate?.id || !selectedTemplate.body?.trim())) {
+        throw new Error('Selecione um template válido antes de enviar.');
+      }
+      const authenticatedUid = auth.currentUser?.uid || user.id;
+      const result = await prospectingService.sendManualWhatsApp(
+        lead.id,
+        lead.empresa || lead.nome,
+        lead.telefone || lead.whatsapp || '',
+        message,
+        user.nome || user.email.split('@')[0],
+        authenticatedUid,
+        user.email,
+        selectedTemplate ? { id: selectedTemplate.id, name: selectedTemplate.name } : undefined
+      );
       await prospectingService.createLog(
         'Mensagem Manual Enviada', 
         `Mensagem comercial confirmada pelo WhatsApp para "${lead.nome}". ID: ${result.messageId}.`,
         'success'
       );
       toast.success(`Mensagem enviada com sucesso para ${lead.empresa || lead.nome}.`);
-      setProspectLeads(current => current.map(item => item.id === lead.id ? { ...item, status: 'Em contato', dataInteracao: new Date().toISOString() } : item));
+      setProspectLeads(current => current.map(item => item.id === lead.id ? { ...item, id: result.prospectLeadId, status: 'Em contato', dataInteracao: new Date().toISOString(), mensagensEnviadas: Number((item as any).mensagensEnviadas || 0) + 1 } as Lead : item));
+      setStats(current => ({ ...current, sent: current.sent + 1 }));
       setSelectedLeadForWhatsApp(null);
       sessionStorage.setItem('atendimento:openLeadId', result.conversationId);
       onViewChange?.('atendimento');

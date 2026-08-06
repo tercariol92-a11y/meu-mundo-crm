@@ -23,6 +23,10 @@ export function normalizeProspectPhone(value: string): string {
   return normalized;
 }
 
+function safeDocumentId(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 export interface ProspectResult {
   id: string;
   nome: string;
@@ -269,15 +273,19 @@ export const prospectingService = {
       return (data.whatsappSessionId || data.sessionId) === activeSession.sessionId;
     });
     const timestamp = serverTimestamp();
-    const leadRef = existing?.ref || doc(collection(db, 'leads'));
-    await setDoc(leadRef, {
+    const crmLeadData = {
       nome: leadNome || 'Empresa sem nome', telefone: normalizedPhone, whatsapp: normalizedPhone,
       status: 'Em atendimento', origem: 'WhatsApp - Prospecção', unreadCount: 0,
       responsavelId: attendantId, assignedUserId: attendantId, assignedUserName: attendant,
       firebaseUid: activeSession.uid, whatsappOwnerUserId: activeSession.uid,
       whatsappSessionId: activeSession.sessionId, sessionId: activeSession.sessionId,
       updatedAt: timestamp, ...(!existing ? { createdAt: timestamp } : {})
-    }, { merge: true });
+    };
+    // The resilient Firestore adapter requires an explicit document path.
+    // Use addDoc for a new CRM lead instead of doc(collection), which produced
+    // "Function doc() cannot be called with an empty path" in production.
+    const leadRef = existing?.ref || await addDoc(collection(db, 'leads'), crmLeadData);
+    if (existing) await setDoc(leadRef, crmLeadData, { merge: true });
 
     const result = await whatsappService.sendMessage(normalizedPhone, text, attendant, {
       attendantId, attendantEmail, source: 'prospeccao', conversationId: leadRef.id
@@ -402,7 +410,7 @@ export const prospectingService = {
   async getAutomations(): Promise<ProspectAutomation[]> {
     try {
       const snap = await getDocs(collection(db, 'prospectionAutomations'));
-      return snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as ProspectAutomation));
+      return snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as ProspectAutomation));
     } catch (e) {
       console.error(e);
       return [];
@@ -424,7 +432,7 @@ export const prospectingService = {
   async getMessageLogs(): Promise<MessageLog[]> {
     try {
       const snap = await getDocs(collection(db, 'prospectionMessages'));
-      return snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as MessageLog))
+      return snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as MessageLog))
         .sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     } catch (e) {
       console.error(e);
@@ -432,21 +440,61 @@ export const prospectingService = {
     }
   },
 
-  async sendManualWhatsApp(leadId: string, leadNome: string, phone: string, text: string, attendant: string, attendantId: string, attendantEmail = '') {
-    const result = await this.sendWhatsAppMessage(leadId, leadNome, phone, text, attendant, attendantId, attendantEmail);
+  async sendManualWhatsApp(
+    leadId: string,
+    leadNome: string,
+    phone: string,
+    text: string,
+    attendant: string,
+    attendantId: string,
+    attendantEmail = '',
+    template?: { id?: string; name?: string }
+  ) {
+    const normalizedPhone = normalizeProspectPhone(phone);
+    const authenticatedUid = safeDocumentId(auth.currentUser?.uid);
+    const effectiveAttendantId = authenticatedUid || safeDocumentId(attendantId);
+    if (!effectiveAttendantId) throw new Error('Não foi possível identificar o usuário responsável pelo envio.');
+
+    let safeLeadId = safeDocumentId(leadId);
+    let prospectRef;
+    if (safeLeadId) {
+      prospectRef = doc(db, 'prospectionLeads', safeLeadId);
+      const existingProspect = await getDoc(prospectRef);
+      if (!existingProspect.exists()) {
+        await setDoc(prospectRef, {
+          nome: leadNome || 'Empresa sem nome', empresa: leadNome || 'Empresa sem nome',
+          telefone: normalizedPhone, whatsapp: normalizedPhone, status: 'Novo',
+          origem: 'Prospecção', responsavelId: effectiveAttendantId,
+          createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+        });
+      }
+    } else {
+      const createdProspect = await addDoc(collection(db, 'prospectionLeads'), {
+        nome: leadNome || 'Empresa sem nome', empresa: leadNome || 'Empresa sem nome',
+        telefone: normalizedPhone, whatsapp: normalizedPhone, status: 'Novo',
+        origem: 'Prospecção', responsavelId: effectiveAttendantId,
+        createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+      });
+      safeLeadId = createdProspect.id;
+      prospectRef = createdProspect;
+    }
+
+    if (!safeLeadId || !prospectRef) throw new Error('O lead não possui um identificador válido.');
+    const result = await this.sendWhatsAppMessage(safeLeadId, leadNome, normalizedPhone, text, attendant, effectiveAttendantId, attendantEmail);
     await addDoc(collection(db, 'prospectionMessages'), {
-      leadId, leadNome, telefone: result.normalizedPhone, mensagem: text, status: 'sent', tipo: 'whatsapp',
+      leadId: safeLeadId, leadNome, empresa: leadNome, telefone: result.normalizedPhone, mensagem: text, status: 'sent', tipo: 'whatsapp',
       messageId: result.messageId, sessionId: result.sessionId, firebaseUid: result.firebaseUid,
-      attendantId, attendantName: attendant, createdAt: new Date().toISOString()
+      attendantId: effectiveAttendantId, attendantName: attendant, attendantEmail,
+      templateId: safeDocumentId(template?.id) || null, templateName: template?.name?.trim() || null,
+      createdAt: new Date().toISOString()
     });
-    const prospectRef = doc(db, 'prospectionLeads', leadId);
     const prospectSnapshot = await getDoc(prospectRef);
     await updateDoc(prospectRef, {
       status: 'Em contato', mensagensEnviadas: Number(prospectSnapshot.data()?.mensagensEnviadas || 0) + 1,
       ultimoContato: serverTimestamp(), ultimoMessageId: result.messageId, ultimoSessionId: result.sessionId,
-      responsavelId: attendantId, responsavelNome: attendant, updatedAt: serverTimestamp()
+      responsavelId: effectiveAttendantId, responsavelNome: attendant, updatedAt: serverTimestamp()
     });
-    return result;
+    return { ...result, prospectLeadId: safeLeadId };
   },
 
   /**
@@ -455,7 +503,7 @@ export const prospectingService = {
   async getTemplates(): Promise<Array<{ id: string, name: string, type: 'whatsapp' | 'email', body: string }>> {
     try {
       const snap = await getDocs(collection(db, 'prospectionTemplates'));
-      return snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
+      return snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as any));
     } catch (e) {
       console.error(e);
       return [];
@@ -473,7 +521,7 @@ export const prospectingService = {
   async getLogs(): Promise<ProspectLog[]> {
     try {
       const snap = await getDocs(collection(db, 'prospectionLogs'));
-      return snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as ProspectLog))
+      return snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as ProspectLog))
         .sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     } catch (e) {
       console.error(e);
@@ -497,7 +545,9 @@ export const prospectingService = {
   async getLeads(): Promise<Lead[]> {
     try {
       const snap = await getDocs(collection(db, 'prospectionLeads'));
-      return snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Lead));
+      // The Firestore document ID is authoritative. Legacy payloads may contain
+      // an empty `id` field and must never overwrite doc.id.
+      return snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as Lead));
     } catch (e) {
       console.error('Erro ao buscar leads de prospecção:', e);
       return [];
