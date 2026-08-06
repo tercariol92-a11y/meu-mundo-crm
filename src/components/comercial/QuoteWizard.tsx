@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useCompanyConfig } from '../../hooks/useCompanyConfig';
 import { motion, AnimatePresence } from 'framer-motion';
+import { calculateProposalTotals, normalizeProposalItem } from '../../utils/proposalTotals';
 
 interface QuoteWizardProps {
   user: Usuario;
@@ -57,7 +58,7 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
   const [products, setProducts] = useState<Produto[]>([]);
   const [searchProduct, setSearchProduct] = useState('');
   const [selectedItems, setSelectedItems] = useState<ItemProposta[]>(() => {
-    return (initialData?.itens || []).map(item => ({
+    return (initialData?.itens || []).map(item => normalizeProposalItem({
       ...item,
       productId: item.productId || item.produtoId,
       valorOriginal: item.valorOriginal ?? item.valorOriginal ?? item.valorUnitario,
@@ -146,18 +147,18 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
           const qty = item.quantidade + 1;
           const price = item.valorEditado !== undefined ? item.valorEditado : (item.valorOriginal ?? item.valorUnitario);
           const sub = qty * price;
-          return {
+          return normalizeProposalItem({
             ...item,
             quantidade: qty,
             valorUnitario: price,
             subtotal: sub,
             total: sub
-          };
+          });
         }
         return item;
       }));
     } else {
-      setSelectedItems([...selectedItems, {
+      setSelectedItems([...selectedItems, normalizeProposalItem({
         produtoId: product.id,
         productId: product.id,
         nome: product.nome,
@@ -170,8 +171,10 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
         total: product.valorVenda,
         imageUrl: product.imageUrl,
         descricao: product.descricao,
-        beneficios: product.beneficios
-      }]);
+        beneficios: product.beneficios,
+        desconto: 0,
+        valorFinal: product.valorVenda
+      })]);
     }
   };
 
@@ -185,13 +188,13 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
       if (item.produtoId === productId) {
         const price = item.valorEditado !== undefined ? item.valorEditado : (item.valorOriginal ?? item.valorUnitario);
         const sub = qty * price;
-        return {
+        return normalizeProposalItem({
           ...item,
           quantidade: qty,
           valorUnitario: price,
           subtotal: sub,
           total: sub
-        };
+        });
       }
       return item;
     }));
@@ -201,19 +204,24 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
     setSelectedItems(selectedItems.map(item => {
       if (item.produtoId === productId) {
         const sub = item.quantidade * price;
-        return {
+        return normalizeProposalItem({
           ...item,
           valorEditado: price,
           valorUnitario: price,
           subtotal: sub,
           total: sub
-        };
+        });
       }
       return item;
     }));
   };
 
-  const totalValue = selectedItems.reduce((sum, item) => sum + (item.subtotal ?? item.total ?? 0), 0);
+  const updateItemBilling = (productId: string, changes: Partial<ItemProposta>) => {
+    setSelectedItems(items => items.map(item => item.produtoId === productId ? normalizeProposalItem({ ...item, ...changes }) : item));
+  };
+
+  const totals = calculateProposalTotals(selectedItems);
+  const totalValue = totals.investimentoInicial;
 
   const requestClose = () => {
     const hasChanges = selectedItems.length > (initialData?.itens?.length || 0) || step > 1;
@@ -250,7 +258,12 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
         titulo: formData.titulo,
         valor: totalValue,
         status: initialData?.status || 'Rascunho',
-        itens: selectedItems,
+        itens: totals.items,
+        totalProdutos: totals.totalProdutos,
+        totalServicos: totals.totalServicos,
+        totalMensal: totals.totalMensal,
+        totalAnual: totals.totalAnual,
+        investimentoInicial: totals.investimentoInicial,
         clienteId: selectedEntity.type === 'cliente' ? selectedEntity.id : undefined,
         clienteNome: selectedEntity.type === 'cliente' ? selectedEntity.name : undefined,
         leadId: selectedEntity.type === 'lead' ? selectedEntity.id : undefined,
@@ -411,7 +424,7 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
                   <div className="space-y-4">
                     <div className="flex items-center gap-2 text-primary">
                       <Package size={18} />
-                      <h3 className="text-xs font-black uppercase tracking-widest">Adicionar Produtos</h3>
+                    <h3 className="text-xs font-black uppercase tracking-widest">Adicionar Itens</h3>
                     </div>
                     <div className="relative">
                       <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant" size={18} />
@@ -470,10 +483,33 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
                         selectedItems.map((item) => (
                           <div key={item.produtoId} className="p-4 bg-surface-container-highest/30 rounded-2xl border border-surface-container-high space-y-3">
                             <div className="flex items-center justify-between">
-                              <p className="text-sm font-bold text-on-surface">{item.nome}</p>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="text-sm font-bold text-on-surface">{item.nome}</p>
+                                <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                                  {item.periodicidade === 'mensal' ? 'Mensal' : item.periodicidade === 'anual' ? 'Anual' : item.tipoItem === 'servico' ? 'Serviço' : 'Produto'}
+                                </span>
+                                {item.migrationNeedsReview && <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Revisar classificação</span>}
+                              </div>
                               <button onClick={() => removeItem(item.produtoId)} className="text-red-500 hover:bg-red-50 p-1.5 rounded-lg transition-colors">
                                 <Trash2 size={16} />
                               </button>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <label className="space-y-1">
+                                <span className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant">Tipo do item</span>
+                                <select value={item.tipoItem || 'produto'} onChange={(e) => {
+                                  const tipoItem = e.target.value as ItemProposta['tipoItem'];
+                                  updateItemBilling(item.produtoId, { tipoItem, periodicidade: tipoItem === 'produto' ? 'unica' : tipoItem === 'recorrencia' && item.periodicidade === 'unica' ? 'mensal' : item.periodicidade });
+                                }} className="w-full px-3 py-2 rounded-xl border border-surface-container-high bg-surface text-xs font-bold">
+                                  <option value="produto">Produto</option><option value="servico">Serviço</option><option value="recorrencia">Recorrência</option>
+                                </select>
+                              </label>
+                              <label className="space-y-1">
+                                <span className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant">Forma de cobrança</span>
+                                <select value={item.periodicidade || 'unica'} disabled={item.tipoItem === 'produto'} onChange={(e) => updateItemBilling(item.produtoId, { periodicidade: e.target.value as ItemProposta['periodicidade'] })} className="w-full px-3 py-2 rounded-xl border border-surface-container-high bg-surface text-xs font-bold disabled:opacity-60">
+                                  {item.tipoItem !== 'recorrencia' && <option value="unica">Pagamento único</option>}<option value="mensal">Mensal</option><option value="anual">Anual</option>
+                                </select>
+                              </label>
                             </div>
                             <div className="flex flex-wrap items-end justify-between gap-4">
                               <div className="space-y-1.5 flex-1 min-w-[120px]">
@@ -487,6 +523,11 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
                                     placeholder="R$ 0,00"
                                   />
                                 </div>
+                              </div>
+
+                              <div className="space-y-1.5 w-28">
+                                <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant ml-1">Desconto R$</label>
+                                <input type="number" min="0" step="0.01" value={item.desconto || 0} onChange={(e) => updateItemBilling(item.produtoId, { desconto: Number(e.target.value) })} className="w-full px-3 py-2 bg-surface-container-low border border-surface-container-high rounded-xl text-sm font-bold" />
                               </div>
 
                               <div className="flex items-center gap-3">
@@ -507,7 +548,7 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
 
                               <div className="text-right shrink-0">
                                 <p className="text-[10px] text-on-surface-variant uppercase tracking-widest font-black">Subtotal</p>
-                                <p className="text-sm font-bold text-primary">R$ {item.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                                <p className="text-sm font-bold text-primary">R$ {(item.valorFinal ?? item.total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
                               </div>
                             </div>
                           </div>
@@ -515,9 +556,12 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
                       )}
                     </div>
                     {selectedItems.length > 0 && (
-                      <div className="p-4 bg-primary text-white rounded-2xl shadow-lg shadow-primary/20 flex items-center justify-between">
-                        <span className="text-xs font-black uppercase tracking-widest">Total Geral</span>
-                        <span className="text-xl font-black">R$ {totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                      <div className="p-4 bg-primary text-white rounded-2xl shadow-lg shadow-primary/20 space-y-2">
+                        {totals.totalProdutos > 0 && <div className="flex justify-between text-xs"><span>Total de produtos</span><b>R$ {totals.totalProdutos.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</b></div>}
+                        {totals.totalServicos > 0 && <div className="flex justify-between text-xs"><span>Total de serviços</span><b>R$ {totals.totalServicos.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</b></div>}
+                        <div className="flex justify-between border-t border-white/30 pt-2"><span className="text-xs font-black uppercase tracking-widest">Investimento inicial</span><span className="text-xl font-black">R$ {totalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>
+                        {totals.totalMensal > 0 && <div className="flex justify-between text-xs"><span>Mensalidade</span><b>R$ {totals.totalMensal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/mês</b></div>}
+                        {totals.totalAnual > 0 && <div className="flex justify-between text-xs"><span>Anuidade</span><b>R$ {totals.totalAnual.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/ano</b></div>}
                       </div>
                     )}
                   </div>

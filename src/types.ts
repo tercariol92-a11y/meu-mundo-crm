@@ -62,6 +62,10 @@ export interface Usuario {
   commissionType?: 'none' | 'percent' | 'fixed';
   commissionRate?: number;
   commissionFixedValue?: number;
+  commissionProductRate?: number;
+  commissionServiceRate?: number;
+  commissionMonthlyRate?: number;
+  commissionAnnualRate?: number;
   monthlyGoal?: number;
   canViewCommission?: boolean;
   metaPropostas?: number;
@@ -577,6 +581,11 @@ export interface ItemProposta {
   imageUrl?: string;
   descricao?: string;
   beneficios?: string;
+  tipoItem?: 'produto' | 'servico' | 'recorrencia';
+  periodicidade?: 'unica' | 'mensal' | 'anual';
+  desconto?: number;
+  valorFinal?: number;
+  migrationNeedsReview?: boolean;
 }
 
 export interface Proposta {
@@ -587,6 +596,11 @@ export interface Proposta {
   leadNome?: string;
   titulo: string;
   valor: number;
+  totalProdutos?: number;
+  totalServicos?: number;
+  totalMensal?: number;
+  totalAnual?: number;
+  investimentoInicial?: number;
   status: 'Rascunho' | 'Enviado' | 'Em negociação' | 'Aprovado' | 'Reprovado' | 'Cancelado';
   itens: ItemProposta[];
   formaPagamento?: string;

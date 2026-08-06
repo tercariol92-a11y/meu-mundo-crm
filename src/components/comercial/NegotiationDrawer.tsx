@@ -8,6 +8,7 @@ import {
   AgendaComercial
 } from '../../types';
 import { formatDateBR } from '../../utils/date';
+import { proposalTotals } from '../../utils/proposalTotals';
 import { databaseService } from '../../services/databaseService';
 import { whatsappService } from '../../services/whatsapp.service';
 import { useGlobalData } from '../../contexts/GlobalDataContext';
@@ -159,7 +160,7 @@ export default function NegotiationDrawer({
 
   // Profit Margin calculation (Admin only)
   const marginInfo = useMemo(() => {
-    const totalValor = quote.valor || 0;
+    const totalValor = proposalTotals(quote).investimentoInicial;
     let totalCusto = 0;
 
     if (quote.itens && quote.itens.length > 0) {
@@ -704,7 +705,7 @@ export default function NegotiationDrawer({
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="p-3 bg-surface-container-highest/20 rounded-2xl border border-surface-container-high">
                   <p className="text-[10px] font-bold uppercase text-on-surface-variant">Valor Total</p>
-                  <p className="text-base font-black text-primary">R$ {quote.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                  <p className="text-base font-black text-primary">R$ {proposalTotals(quote).investimentoInicial.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
                 </div>
 
                 {/* MARGEM DE LUCRO: Visível Apenas para Administrador (Item 6) */}
@@ -994,7 +995,7 @@ export default function NegotiationDrawer({
       <div className="p-5 bg-surface-container-low border-t border-surface-container-high flex items-center justify-between shrink-0 shadow-xs">
         <div>
           <p className="text-[10px] font-bold uppercase text-on-surface-variant">Valor da Proposta</p>
-          <p className="text-xl font-black text-primary">R$ {quote.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+          <p className="text-xl font-black text-primary">R$ {proposalTotals(quote).investimentoInicial.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
         </div>
 
         <div className="flex items-center gap-2">

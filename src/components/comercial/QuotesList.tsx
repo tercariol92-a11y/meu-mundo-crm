@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import QuoteWizard from './QuoteWizard';
+import { proposalTotals } from '../../utils/proposalTotals';
 import ProposalViewer from './ProposalViewer';
 import NegotiationDrawer from './NegotiationDrawer';
 import { useGlobalData } from '../../contexts/GlobalDataContext';
@@ -115,10 +116,17 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
     return matchesSearch && matchesStatus && matchesVendedor;
   }), [quotes, searchTerm, statusFilter, vendedorFilter, clientsData, leadsData]);
 
+  const approvedTotals = quotes.filter(q => q.status === 'Aprovado').map(proposalTotals);
   const stats = {
-    totalValue: quotes.reduce((sum, q) => sum + q.valor, 0),
+    totalValue: quotes.reduce((sum, q) => sum + proposalTotals(q).investimentoInicial, 0),
     approvalRate: quotes.length > 0 ? (quotes.filter(q => q.status === 'Aprovado').length / quotes.length) * 100 : 0,
-    revenue: quotes.filter(q => q.status === 'Aprovado').reduce((sum, q) => sum + q.valor, 0),
+    revenue: approvedTotals.reduce((sum, total) => sum + total.investimentoInicial, 0),
+    products: approvedTotals.reduce((sum, total) => sum + total.totalProdutos, 0),
+    services: approvedTotals.reduce((sum, total) => sum + total.totalServicos, 0),
+    mrr: approvedTotals.reduce((sum, total) => sum + total.totalMensal, 0),
+    arr: approvedTotals.reduce((sum, total) => sum + total.totalAnual, 0),
+    monthlyCount: approvedTotals.filter(total => total.hasMonthly).length,
+    annualCount: approvedTotals.filter(total => total.hasAnnual).length,
     activeQuotes: quotes.filter(q => q.status === 'Enviado' || q.status === 'Rascunho' || q.status === 'Em negociação').length
   };
 
@@ -224,7 +232,7 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
       </div>
 
       {/* Dashboard Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 xl:grid-cols-7 gap-4">
         <div className="bg-surface-container-low p-6 rounded-3xl border border-surface-container-high shadow-sm space-y-2">
           <div className="flex items-center justify-between">
             <div className="p-2 bg-blue-100 text-blue-600 rounded-xl">
@@ -268,6 +276,9 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
           <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Propostas Ativas</p>
           <p className="text-2xl font-black text-on-surface">{stats.activeQuotes}</p>
         </div>
+        <div className="bg-surface-container-low p-5 rounded-3xl border border-surface-container-high"><p className="text-[9px] font-black uppercase text-on-surface-variant">Produtos vendidos</p><p className="text-xl font-black">R$ {stats.products.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}</p></div>
+        <div className="bg-surface-container-low p-5 rounded-3xl border border-surface-container-high"><p className="text-[9px] font-black uppercase text-on-surface-variant">Serviços vendidos</p><p className="text-xl font-black">R$ {stats.services.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}</p></div>
+        <div className="bg-surface-container-low p-5 rounded-3xl border border-surface-container-high"><p className="text-[9px] font-black uppercase text-on-surface-variant">MRR / ARR</p><p className="text-sm font-black text-blue-700">R$ {stats.mrr.toLocaleString('pt-BR')}/mês</p><p className="text-sm font-black text-purple-700">R$ {stats.arr.toLocaleString('pt-BR')}/ano</p><p className="text-[9px] text-on-surface-variant">{stats.monthlyCount} mensais · {stats.annualCount} anuais</p></div>
       </div>
 
       {/* Filters */}
@@ -395,7 +406,7 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-1 text-sm font-bold text-primary">
                         <span>R$</span>
-                        <span>{quote.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                        <span>{proposalTotals(quote).investimentoInicial.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
                       </div>
                     </td>
                     <td className="px-6 py-4">

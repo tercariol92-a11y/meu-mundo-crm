@@ -34,6 +34,7 @@ import {
 } from 'firebase/storage';
 import { auth, db, storage, firebaseConfig, triggerMockAuthStateChanged, onAuthStateChanged } from '../firebase';
 import { whatsappService } from './whatsapp.service';
+import { calculateProposalTotals, proposalTotals } from '../utils/proposalTotals';
 import { 
   Usuario, 
   CustomerPortalUser,
@@ -2769,7 +2770,8 @@ export const databaseService = {
 
   async createProposta(proposta: Omit<Proposta, 'id' | 'createdAt' | 'updatedAt' | 'cliente' | 'lead'>) {
     try {
-      const sanitized = sanitizeData(proposta);
+      const calculated = calculateProposalTotals(proposta.itens || []);
+      const sanitized = sanitizeData({ ...proposta, itens: calculated.items, valor: calculated.investimentoInicial, totalProdutos: calculated.totalProdutos, totalServicos: calculated.totalServicos, totalMensal: calculated.totalMensal, totalAnual: calculated.totalAnual, investimentoInicial: calculated.investimentoInicial });
       const insertData: any = {
         ...sanitized,
         createdAt: serverTimestamp(),
@@ -2832,7 +2834,8 @@ export const databaseService = {
 
   async updateProposta(id: string, proposta: Partial<Proposta>) {
     try {
-      const sanitized = sanitizeData(proposta);
+      const calculated = proposta.itens ? calculateProposalTotals(proposta.itens) : null;
+      const sanitized = sanitizeData(calculated ? { ...proposta, itens: calculated.items, valor: calculated.investimentoInicial, totalProdutos: calculated.totalProdutos, totalServicos: calculated.totalServicos, totalMensal: calculated.totalMensal, totalAnual: calculated.totalAnual, investimentoInicial: calculated.investimentoInicial } : proposta);
       const docRef = doc(db, 'propostas', id);
       
       const updateData: any = {
@@ -3164,20 +3167,30 @@ export const databaseService = {
       const metaMensal = userSnap?.monthlyGoal || userSnap?.metaMensal || 0;
       const tipoComissao = userSnap?.commissionType || (userSnap?.tipoComissao === 'percentual' ? 'percent' : userSnap?.tipoComissao === 'fixo' ? 'fixed' : 'none');
 
-      const totalVendidoMes = approvedPropostas.reduce((sum, p) => sum + (p.valor || 0), 0);
+      const approvedTotals = approvedPropostas.map(proposalTotals);
+      const negotiationTotals = inNegotiationPropostas.map(proposalTotals);
+      const totalVendidoMes = approvedTotals.reduce((sum, total) => sum + total.investimentoInicial, 0);
       
       let comissaoGanha = 0;
       if (tipoComissao === 'percent') {
-        comissaoGanha = (totalVendidoMes * comissaoPadrao) / 100;
+        comissaoGanha = approvedTotals.reduce((sum, total) => sum
+          + total.totalProdutos * (((userSnap as any)?.commissionProductRate ?? comissaoPadrao) / 100)
+          + total.totalServicos * (((userSnap as any)?.commissionServiceRate ?? comissaoPadrao) / 100)
+          + total.totalMensal * (((userSnap as any)?.commissionMonthlyRate ?? comissaoPadrao) / 100)
+          + total.totalAnual * (((userSnap as any)?.commissionAnnualRate ?? comissaoPadrao) / 100), 0);
       } else if (tipoComissao === 'fixed') {
         comissaoGanha = approvedPropostas.length * valorFixoComissao;
       }
 
-      const totalEmNegociacao = inNegotiationPropostas.reduce((sum, p) => sum + (p.valor || 0), 0);
+      const totalEmNegociacao = negotiationTotals.reduce((sum, total) => sum + total.investimentoInicial, 0);
       
       let comissaoPrevista = 0;
       if (tipoComissao === 'percent') {
-        comissaoPrevista = (totalEmNegociacao * comissaoPadrao) / 100;
+        comissaoPrevista = negotiationTotals.reduce((sum, total) => sum
+          + total.totalProdutos * (((userSnap as any)?.commissionProductRate ?? comissaoPadrao) / 100)
+          + total.totalServicos * (((userSnap as any)?.commissionServiceRate ?? comissaoPadrao) / 100)
+          + total.totalMensal * (((userSnap as any)?.commissionMonthlyRate ?? comissaoPadrao) / 100)
+          + total.totalAnual * (((userSnap as any)?.commissionAnnualRate ?? comissaoPadrao) / 100), 0);
       } else if (tipoComissao === 'fixed') {
         comissaoPrevista = inNegotiationPropostas.length * valorFixoComissao;
       }

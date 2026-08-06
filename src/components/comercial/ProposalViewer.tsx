@@ -23,6 +23,7 @@ import { motion } from 'framer-motion';
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { databaseService } from '../../services/databaseService';
+import { proposalTotals } from '../../utils/proposalTotals';
 
 import { useCompanyConfig } from '../../hooks/useCompanyConfig';
 
@@ -76,6 +77,7 @@ export default function ProposalViewer({ quote, onClose }: ProposalViewerProps) 
   const companyLocation = companyConfig?.cidade ? `${companyConfig.cidade}, ${companyConfig.estado || ''}` : 'Brasil';
   const companyLogo = companyConfig?.logoUrl;
   const companyCapa = companyConfig?.capaUrl;
+  const totals = proposalTotals(quote);
 
   return (
     <>
@@ -236,7 +238,7 @@ export default function ProposalViewer({ quote, onClose }: ProposalViewerProps) 
                <div className="grid grid-cols-2 gap-12">
                   <div className="space-y-4">
                     <h3 className="font-bold flex items-center gap-2">Valor Total</h3>
-                    <p className="text-3xl font-black text-primary">R$ {quote.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                    <p className="text-3xl font-black text-primary">R$ {totals.investimentoInicial.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
                   </div>
                   <div className="space-y-4">
                     <h3 className="font-bold">Validade</h3>
@@ -409,7 +411,7 @@ export default function ProposalViewer({ quote, onClose }: ProposalViewerProps) 
                               </div>
                               <div className="flex-1 space-y-2">
                                 <div className="flex justify-between items-start">
-                                  <h4 className="text-base font-black text-black uppercase">{item.nome}</h4>
+                                  <div><h4 className="text-base font-black text-black uppercase">{item.nome}</h4><span className="text-[8px] font-black uppercase text-primary">{totals.items[idx].periodicidade === 'mensal' ? 'Mensal' : totals.items[idx].periodicidade === 'anual' ? 'Anual' : totals.items[idx].tipoItem === 'servico' ? 'Serviço' : 'Produto'}</span></div>
                                   <span className="text-[10px] font-black bg-primary text-white px-2 py-1 rounded">QTD: {item.quantidade}</span>
                                 </div>
                                 <p className="text-xs text-gray-600 line-clamp-3 leading-relaxed">{item.descricao}</p>
@@ -446,16 +448,17 @@ export default function ProposalViewer({ quote, onClose }: ProposalViewerProps) 
                             <tbody className="divide-y divide-gray-100">
                               {quote.itens.map((item, idx) => (
                                 <tr key={idx}>
-                                  <td className="px-4 py-2 font-bold">{item.nome}</td>
+                                  <td className="px-4 py-2 font-bold">{item.nome}<div className="text-[8px] uppercase text-primary">{totals.items[idx].periodicidade === 'mensal' ? 'Mensal' : totals.items[idx].periodicidade === 'anual' ? 'Anual' : totals.items[idx].tipoItem === 'servico' ? 'Serviço' : 'Produto'}</div></td>
                                   <td className="px-4 py-2 text-center">{item.quantidade}</td>
                                   <td className="px-4 py-2 text-right text-xs text-gray-500">R$ {item.valorUnitario.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                  <td className="px-4 py-2 text-right">R$ {item.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                                  <td className="px-4 py-2 text-right">R$ {(totals.items[idx].valorFinal ?? totals.items[idx].total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
                                 </tr>
                               ))}
-                              <tr className="bg-gray-50 font-black text-primary">
-                                <td colSpan={3} className="px-4 py-4 text-right uppercase tracking-widest">Total Geral</td>
-                                <td className="px-4 py-4 text-right text-xl text-primary">R$ {quote.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                              </tr>
+                              {totals.totalProdutos > 0 && <tr className="bg-gray-50 font-bold"><td colSpan={3} className="px-4 py-2 text-right uppercase">Total de produtos</td><td className="px-4 py-2 text-right">R$ {totals.totalProdutos.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td></tr>}
+                              {totals.totalServicos > 0 && <tr className="bg-gray-50 font-bold"><td colSpan={3} className="px-4 py-2 text-right uppercase">Total de serviços</td><td className="px-4 py-2 text-right">R$ {totals.totalServicos.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td></tr>}
+                              <tr className="bg-primary/10 font-black text-primary"><td colSpan={3} className="px-4 py-4 text-right uppercase tracking-widest">Investimento inicial</td><td className="px-4 py-4 text-right text-xl">R$ {totals.investimentoInicial.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td></tr>
+                              {totals.totalMensal > 0 && <tr className="bg-blue-50 font-black text-blue-700"><td colSpan={3} className="px-4 py-3 text-right uppercase">Mensalidade</td><td className="px-4 py-3 text-right">R$ {totals.totalMensal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/mês</td></tr>}
+                              {totals.totalAnual > 0 && <tr className="bg-purple-50 font-black text-purple-700"><td colSpan={3} className="px-4 py-3 text-right uppercase">Anuidade</td><td className="px-4 py-3 text-right">R$ {totals.totalAnual.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/ano</td></tr>}
                             </tbody>
                           </table>
                         </div>

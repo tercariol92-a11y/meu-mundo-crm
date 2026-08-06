@@ -87,6 +87,10 @@ export default function UserManagement({ user }: { user: UserType }) {
     receivesCommission: false,
     commissionType: 'none',
     commissionRate: 0,
+    commissionProductRate: 0,
+    commissionServiceRate: 0,
+    commissionMonthlyRate: 0,
+    commissionAnnualRate: 0,
     commissionFixedValue: 0,
     monthlyGoal: 0,
     canViewCommission: false,
@@ -119,6 +123,10 @@ export default function UserManagement({ user }: { user: UserType }) {
         receivesCommission: u.receivesCommission || (u.tipoComissao && u.tipoComissao !== 'nenhuma') || false,
         commissionType: u.commissionType || (u.tipoComissao === 'percentual' ? 'percent' : u.tipoComissao === 'fixo' ? 'fixed' : 'none'),
         commissionRate: u.commissionRate || u.comissaoPadrao || 0,
+        commissionProductRate: u.commissionProductRate ?? u.commissionRate ?? u.comissaoPadrao ?? 0,
+        commissionServiceRate: u.commissionServiceRate ?? u.commissionRate ?? u.comissaoPadrao ?? 0,
+        commissionMonthlyRate: u.commissionMonthlyRate ?? u.commissionRate ?? u.comissaoPadrao ?? 0,
+        commissionAnnualRate: u.commissionAnnualRate ?? u.commissionRate ?? u.comissaoPadrao ?? 0,
         commissionFixedValue: u.commissionFixedValue || u.valorFixoComissao || 0,
         monthlyGoal: u.monthlyGoal || u.metaMensal || 0,
         canViewCommission: u.canViewCommission !== undefined ? u.canViewCommission : (u.podeVerComissao !== undefined ? u.podeVerComissao : false),
@@ -137,6 +145,10 @@ export default function UserManagement({ user }: { user: UserType }) {
         receivesCommission: false,
         commissionType: 'none',
         commissionRate: 0,
+        commissionProductRate: 0,
+        commissionServiceRate: 0,
+        commissionMonthlyRate: 0,
+        commissionAnnualRate: 0,
         commissionFixedValue: 0,
         monthlyGoal: 0,
         canViewCommission: false,
@@ -956,7 +968,7 @@ export default function UserManagement({ user }: { user: UserType }) {
 
                             <div className="grid grid-cols-2 gap-4">
                               {formData.commissionType === 'percent' && (
-                                <div className="space-y-1.5">
+                                <div className="space-y-1.5 col-span-2">
                                   <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant ml-1">Percentual de Comissão</label>
                                   <div className="relative">
                                     <input
@@ -971,6 +983,11 @@ export default function UserManagement({ user }: { user: UserType }) {
                                       placeholder="0.0"
                                     />
                                     <span className="absolute right-4 top-1/2 -translate-y-1/2 text-on-surface-variant font-black text-xs">%</span>
+                                  </div>
+                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
+                                    {([['commissionProductRate', 'Produtos'], ['commissionServiceRate', 'Serviços'], ['commissionMonthlyRate', 'Mensalidade'], ['commissionAnnualRate', 'Anuidade']] as const).map(([field, label]) => (
+                                      <label key={field} className="text-[9px] font-black uppercase text-on-surface-variant">{label}<div className="relative mt-1"><input type="number" min="0" max="100" step="0.1" readOnly={!isEditingMode || !canEditCommissions} value={formData[field] ?? formData.commissionRate ?? 0} onChange={(e) => setFormData({ ...formData, [field]: Number(e.target.value) })} className="w-full px-3 py-2 pr-7 rounded-xl border border-surface-container-high bg-surface text-xs font-bold"/><span className="absolute right-2 top-2 text-xs">%</span></div></label>
+                                    ))}
                                   </div>
                                 </div>
                               )}

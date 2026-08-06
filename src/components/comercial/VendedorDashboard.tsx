@@ -22,6 +22,7 @@ import { databaseService } from '../../services/databaseService';
 import { tasksService } from '../../services/tasksService';
 import MinhasMetasCard from '../gestao/MinhasMetasCard';
 import { appointmentStart, commercialAgendaService } from '../../services/commercialAgendaService';
+import { proposalTotals } from '../../utils/proposalTotals';
 
 interface VendedorDashboardProps {
   user: Usuario;
@@ -161,7 +162,7 @@ export default function VendedorDashboard({ user }: VendedorDashboardProps) {
   // Fallback defaults if databaseService fetch fails or is slow
   const activeStats = dbStats || {
     totalVendasMes: personalProposals.filter(p => p.status === 'Aprovado').length,
-    valorTotalMes: personalProposals.filter(p => p.status === 'Aprovado').reduce((sum, p) => sum + (p.valor || 0), 0),
+    valorTotalMes: personalProposals.filter(p => p.status === 'Aprovado').reduce((sum, p) => sum + proposalTotals(p).investimentoInicial, 0),
     comissaoGanha: 0,
     comissaoPrevista: 0,
     metaMensal: selectedUserObject.monthlyGoal || selectedUserObject.metaMensal || 0,
@@ -477,7 +478,7 @@ export default function VendedorDashboard({ user }: VendedorDashboardProps) {
                     </p>
                   </div>
                   <div className="text-right shrink-0 space-y-1.5">
-                    <p className="text-xs font-black text-primary">{formatCurrency(prop.valor)}</p>
+                    <p className="text-xs font-black text-primary">{formatCurrency(proposalTotals(prop).investimentoInicial)}</p>
                     <span className={`inline-block text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border ${
                       prop.status === 'Aprovado' ? 'bg-green-100 text-green-700 border-green-200' :
                       prop.status === 'Rascunho' ? 'bg-slate-100 text-slate-600 border-slate-200' :

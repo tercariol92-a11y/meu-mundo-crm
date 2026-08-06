@@ -39,6 +39,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { onSnapshot, collection } from '../../services/resilientFirestoreClient';
 import { db } from '../../firebase';
+import { proposalTotals } from '../../utils/proposalTotals';
 import { 
   format, 
   startOfDay, 
@@ -175,15 +176,21 @@ export default function CommercialDashboard({ user }: CommercialDashboardProps) 
     const closedQuotes = filteredData.quotes.filter(q => q.status === 'Aprovado');
     const inNegotiationQuotes = filteredData.quotes.filter(q => q.status === 'Em negociação');
     
-    const valorVendido = closedQuotes.reduce((acc, q) => acc + (q.valor || 0), 0);
-    const valorEmNegociacao = inNegotiationQuotes.reduce((acc, q) => acc + (q.valor || 0), 0);
+    const closedTotals = closedQuotes.map(proposalTotals);
+    const negotiationTotals = inNegotiationQuotes.map(proposalTotals);
+    const valorVendido = closedTotals.reduce((acc, total) => acc + total.investimentoInicial, 0);
+    const valorEmNegociacao = negotiationTotals.reduce((acc, total) => acc + total.investimentoInicial, 0);
+    const produtosVendidos = closedTotals.reduce((acc, total) => acc + total.totalProdutos, 0);
+    const servicosVendidos = closedTotals.reduce((acc, total) => acc + total.totalServicos, 0);
+    const mrr = closedTotals.reduce((acc, total) => acc + total.totalMensal, 0);
+    const arr = closedTotals.reduce((acc, total) => acc + total.totalAnual, 0);
     
     // Profit Calculation (Only if allowed)
     let lucroTotal = 0;
     if (canViewLucro) {
        lucroTotal = closedQuotes.reduce((acc, q) => {
          const custo = q.itens?.reduce((cAcc, item) => cAcc + ((item.custoUnitario || 0) * item.quantidade), 0) || 0;
-         return acc + ((q.valor || 0) - custo);
+         return acc + (proposalTotals(q).investimentoInicial - custo);
        }, 0);
     }
 
@@ -218,9 +225,14 @@ export default function CommercialDashboard({ user }: CommercialDashboardProps) 
 
         if (type === 'percent') {
           const rate = seller.commissionRate || seller.comissaoPadrao || 0;
-          comissaoGanha = (valorVendido * rate) / 100;
-          comissaoPrevista = (valorEmNegociacao * rate) / 100;
-          comissaoRateText = `${rate}%`;
+          const commissionFor = (totals: ReturnType<typeof proposalTotals>[]) => totals.reduce((sum, total) => sum
+            + total.totalProdutos * ((seller.commissionProductRate ?? rate) / 100)
+            + total.totalServicos * ((seller.commissionServiceRate ?? rate) / 100)
+            + total.totalMensal * ((seller.commissionMonthlyRate ?? rate) / 100)
+            + total.totalAnual * ((seller.commissionAnnualRate ?? rate) / 100), 0);
+          comissaoGanha = commissionFor(closedTotals);
+          comissaoPrevista = commissionFor(negotiationTotals);
+          comissaoRateText = `${rate}% base`;
         } else if (type === 'fixed') {
           const val = seller.commissionFixedValue || seller.valorFixoComissao || 0;
           comissaoGanha = closedQuotes.length * val;
@@ -236,6 +248,12 @@ export default function CommercialDashboard({ user }: CommercialDashboardProps) 
       emNegociacaoCount: inNegotiationQuotes.length,
       valorEmNegociacao,
       lucroTotal,
+      produtosVendidos,
+      servicosVendidos,
+      mrr,
+      arr,
+      propostasMensais: closedTotals.filter(total => total.hasMonthly).length,
+      propostasAnuais: closedTotals.filter(total => total.hasAnnual).length,
       comissaoGanha,
       comissaoPrevista,
       comissaoRateText,
@@ -255,7 +273,7 @@ export default function CommercialDashboard({ user }: CommercialDashboardProps) 
       if (!sellerStats[q.vendedorId]) {
         sellerStats[q.vendedorId] = { id: q.vendedorId, name: seller?.nome || 'Desconhecido', value: 0, count: 0 };
       }
-      sellerStats[q.vendedorId].value += (q.valor || 0);
+      sellerStats[q.vendedorId].value += proposalTotals(q).investimentoInicial;
       sellerStats[q.vendedorId].count += 1;
     });
 
@@ -456,6 +474,13 @@ export default function CommercialDashboard({ user }: CommercialDashboardProps) 
         )}
       </div>
 
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard title="Produtos vendidos" value={formatCurrency(stats.produtosVendidos)} icon={<DollarSign size={20} />} color="bg-emerald-500" />
+        <StatCard title="Serviços vendidos" value={formatCurrency(stats.servicosVendidos)} icon={<FileText size={20} />} color="bg-cyan-500" />
+        <StatCard title={`MRR (${stats.propostasMensais} propostas)`} value={`${formatCurrency(stats.mrr)}/mês`} icon={<TrendingUp size={20} />} color="bg-blue-500" />
+        <StatCard title={`ARR (${stats.propostasAnuais} propostas)`} value={`${formatCurrency(stats.arr)}/ano`} icon={<CalendarDays size={20} />} color="bg-purple-500" />
+      </div>
+
       {/* Commission and Goals Section (Individual View) */}
       {viewType === 'individual' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -613,5 +638,3 @@ function StatCard({ title, value, icon, color }: { title: string, value: string 
     </div>
   );
 }
-
-
