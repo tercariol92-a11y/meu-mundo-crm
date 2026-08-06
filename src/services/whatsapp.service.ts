@@ -114,7 +114,7 @@ export const whatsappService = {
     mensagem: string,
     attendant?: string,
     manualContext?: {
-      attendantId?: string; attendantEmail?: string; source?: 'atendimento'; isGroup?: boolean; groupId?: string;
+      attendantId?: string; attendantEmail?: string; source?: 'atendimento' | 'prospeccao'; isGroup?: boolean; groupId?: string;
       satisfactionSurvey?: boolean; conversationId?: string; atendimentoId?: string; clientId?: string; ticketId?: string;
     }
   ) {
@@ -129,7 +129,7 @@ export const whatsappService = {
           attendantName: attendant,
           attendantId: manualContext?.attendantId,
           attendantEmail: manualContext?.attendantEmail,
-          manualFromAtendimento: manualContext?.source === 'atendimento',
+          manualFromAtendimento: manualContext?.source === 'atendimento' || manualContext?.source === 'prospeccao',
           isGroup: Boolean(manualContext?.isGroup),
           groupId: manualContext?.groupId
           ,satisfactionSurvey: Boolean(manualContext?.satisfactionSurvey)

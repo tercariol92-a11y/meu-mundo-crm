@@ -454,8 +454,8 @@ export default function CustomerEquipmentDetail({ user, equipmentId, onBack, onO
                               </div>
 
                               {/* Assinatura / Aceite do Cliente */}
-                              {ticket.assinaturaCliente && (
-                                <div className="pt-4 border-t border-surface-container-high flex items-center justify-between">
+                              {(ticket.customerSignatureUrl || ticket.assinaturaCliente) && (
+                                <div className="pt-4 border-t border-surface-container-high flex items-center justify-between gap-4">
                                   <div>
                                     <div className="flex items-center gap-2 text-green-600">
                                       <CheckCircle2 size={16} />
@@ -463,6 +463,7 @@ export default function CustomerEquipmentDetail({ user, equipmentId, onBack, onO
                                     </div>
                                     <p className="text-[8px] text-on-surface-variant mt-0.5">Registrado em {ticket.assinaturaData ? new Date(ticket.assinaturaData).toLocaleDateString('pt-BR') : '-'}</p>
                                   </div>
+                                  <img src={ticket.customerSignatureUrl || ticket.assinaturaCliente} alt="Assinatura do cliente" className="max-h-16 max-w-40 object-contain bg-white border rounded-lg p-1" />
                                 </div>
                               )}
                             </div>

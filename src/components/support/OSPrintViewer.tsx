@@ -312,9 +312,9 @@ export default function OSPrintViewer({ chamado, onClose }: OSPrintViewerProps) 
 
                 {/* Assinatura Cliente */}
                 <div className="flex flex-col items-center text-center space-y-4">
-                  {chamado.assinaturaCliente ? (
+                  {(chamado.customerSignatureUrl || chamado.assinaturaCliente) ? (
                     <div className="h-16 flex items-center justify-center p-1 bg-slate-50 rounded-lg border border-slate-200">
-                      <img src={chamado.assinaturaCliente} alt="Assinatura" className="max-h-full" />
+                      <img src={chamado.customerSignatureUrl || chamado.assinaturaCliente} alt="Assinatura" className="max-h-full" />
                     </div>
                   ) : (
                     <div className="w-full border-b border-slate-300 pb-1 mt-10"></div>
@@ -454,9 +454,9 @@ export default function OSPrintViewer({ chamado, onClose }: OSPrintViewerProps) 
             </div>
 
             <div className="flex flex-col items-center text-center">
-              {chamado.assinaturaCliente ? (
+              {(chamado.customerSignatureUrl || chamado.assinaturaCliente) ? (
                 <div className="h-10 flex items-center justify-center p-0.5 border border-slate-200 rounded">
-                  <img src={chamado.assinaturaCliente} alt="Assinatura" className="max-h-full" />
+                  <img src={chamado.customerSignatureUrl || chamado.assinaturaCliente} alt="Assinatura" className="max-h-full" />
                 </div>
               ) : (
                 <div className="w-full border-b border-slate-400 pb-0.5 mt-8"></div>

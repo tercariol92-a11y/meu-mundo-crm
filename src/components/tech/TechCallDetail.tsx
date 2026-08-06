@@ -26,6 +26,7 @@ import SignaturePad from './SignaturePad';
 import { CameraCaptureModal } from '../common/CameraCaptureModal';
 import ServiceOrderPhotoGallery from '../support/ServiceOrderPhotoGallery';
 import { serviceOrderPhotosService } from '../../services/serviceOrderPhotosService';
+import { serviceOrderSignatureService } from '../../services/serviceOrderSignatureService';
 
 interface TechCallDetailProps {
   callId: string;
@@ -40,6 +41,7 @@ export default function TechCallDetail({ callId, tecnico, onBack, onStatusUpdate
   const [isSaving, setIsSaving] = useState(false);
   const [showSignature, setShowSignature] = useState(false);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [signatureError, setSignatureError] = useState('');
   
   // Local states for updating
   const [observacoes, setObservacoes] = useState('');
@@ -105,11 +107,19 @@ export default function TechCallDetail({ callId, tecnico, onBack, onStatusUpdate
   const handleFinish = async (signatureDataUrl: string) => {
     if (!call) return;
     setIsSaving(true);
+    setSignatureError('');
     try {
+      const uploaded = await serviceOrderSignatureService.uploadCustomerSignature(call.id, signatureDataUrl);
+      const signedAt = new Date().toISOString();
       const updates: Partial<Chamado> = {
         status: 'finalizado',
-        assinaturaCliente: signatureDataUrl,
-        assinaturaData: new Date().toISOString(),
+        assinaturaCliente: uploaded.url,
+        assinaturaData: signedAt,
+        customerSignatureUrl: uploaded.url,
+        customerSignaturePath: uploaded.storagePath,
+        customerSignedAt: signedAt,
+        customerSignedBy: (call.cliente as any)?.responsavelNome || call.clienteNome || 'Cliente',
+        customerSignatureMimeType: uploaded.mimeType,
         dataFechamento: new Date().toISOString(),
         observacoesTecnicas: observacoes,
         servicoExecutado: servicoExecutado,
@@ -121,7 +131,9 @@ export default function TechCallDetail({ callId, tecnico, onBack, onStatusUpdate
       setShowSignature(false);
       onStatusUpdate?.();
     } catch (error) {
-      console.error('Error finishing call:', error);
+      console.error('[TECH SERVICE ORDER SIGNATURE ERROR]', { orderId: call.id, error });
+      setSignatureError('Não foi possível salvar a assinatura. O atendimento não foi finalizado.');
+      throw error;
     } finally {
       setIsSaving(false);
     }
@@ -427,15 +439,15 @@ export default function TechCallDetail({ callId, tecnico, onBack, onStatusUpdate
         </section>
 
         {/* Signature View if finalized */}
-        {isFinalized && call.assinaturaCliente && (
+        {isFinalized && (call.customerSignatureUrl || call.assinaturaCliente) && (
           <section className="space-y-4 px-2">
             <h3 className="text-xs font-black text-on-surface-variant uppercase tracking-[0.2em]">Assinatura</h3>
             <div className="bg-surface-container-low p-6 rounded-[2rem] border border-outline/30 flex flex-col items-center">
-              <img src={call.assinaturaCliente} alt="Assinatura" className="max-h-32 mb-4" />
+              <img src={call.customerSignatureUrl || call.assinaturaCliente} alt="Assinatura" className="max-h-32 mb-4" />
               <div className="text-center">
                 <p className="text-[10px] font-black text-on-surface-variant uppercase tracking-widest">Finalizado por {tecnico.nome}</p>
                 <p className="text-[10px] font-black text-primary uppercase tracking-widest">
-                  {call.assinaturaData ? new Date(call.assinaturaData).toLocaleString('pt-BR') : '-'}
+                  {(call.customerSignedAt || call.assinaturaData) ? new Date(call.customerSignedAt || call.assinaturaData!).toLocaleString('pt-BR') : '-'}
                 </p>
               </div>
             </div>
@@ -470,6 +482,7 @@ export default function TechCallDetail({ callId, tecnico, onBack, onStatusUpdate
         <SignaturePad 
           onSave={handleFinish}
           onCancel={() => setShowSignature(false)}
+          externalError={signatureError}
         />
       )}
 

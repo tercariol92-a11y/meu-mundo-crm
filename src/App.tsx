@@ -253,7 +253,7 @@ function AppContent() {
         return <CommercialDashboard user={internalUser} />;
       case 'comercial-agenda':
       case 'crm-agenda':
-        return <AgendaComercialView userId={internalUser.id} />;
+        return <AgendaComercialView user={internalUser} />;
       case 'comercial-acoes':
         return <CommercialActionsView userId={internalUser.id} />;
       case 'comercial-motivos-perda':

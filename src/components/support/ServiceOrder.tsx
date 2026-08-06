@@ -32,6 +32,7 @@ import { CameraCaptureModal } from '../common/CameraCaptureModal';
 import OSPrintViewer from './OSPrintViewer';
 import ServiceOrderPhotoGallery from './ServiceOrderPhotoGallery';
 import { serviceOrderPhotosService } from '../../services/serviceOrderPhotosService';
+import { serviceOrderSignatureService } from '../../services/serviceOrderSignatureService';
 
 interface ServiceOrderProps {
   chamadoId: string;
@@ -56,6 +57,7 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
   const [error, setError] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [signatureStatus, setSignatureStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const sigPad = useRef<SignatureCanvas>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   
@@ -196,27 +198,48 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
       return;
     }
 
-    let signatureData = '';
-    if (sigPad.current && !sigPad.current.isEmpty()) {
-      signatureData = sigPad.current.getTrimmedCanvas().toDataURL('image/png');
+    const existingSignature = chamado.customerSignatureUrl || chamado.assinaturaCliente;
+    const hasNewSignature = Boolean(sigPad.current && !sigPad.current.isEmpty());
+    if (!existingSignature && !hasNewSignature) {
+      setError('Solicite a assinatura do cliente antes de finalizar o atendimento');
+      return;
     }
 
     setSaving(true);
     try {
+      let signatureUrl = existingSignature || '';
+      let signaturePath = chamado.customerSignaturePath || '';
+      if (hasNewSignature && sigPad.current) {
+        setSignatureStatus('saving');
+        const signatureData = sigPad.current.getTrimmedCanvas().toDataURL('image/png');
+        const uploaded = await serviceOrderSignatureService.uploadCustomerSignature(chamado.id, signatureData);
+        signatureUrl = uploaded.url;
+        signaturePath = uploaded.storagePath;
+        setSignatureStatus('saved');
+      }
+      const signedAt = chamado.customerSignedAt || chamado.assinaturaData || new Date().toISOString();
+      const signedBy = chamado.customerSignedBy || (chamado.cliente as any)?.responsavelNome || chamado.clienteNome || 'Cliente';
       await databaseService.updateChamado(chamado.id, {
         status: 'concluido',
         solucaoAplicada: solucao,
         observacoesTecnicas: obs,
         fotos: fotos,
         checklist: checklist,
-        assinaturaCliente: signatureData,
+        assinaturaCliente: signatureUrl,
+        assinaturaData: signedAt,
+        customerSignatureUrl: signatureUrl,
+        customerSignaturePath: signaturePath,
+        customerSignedAt: signedAt,
+        customerSignedBy: signedBy,
+        customerSignatureMimeType: 'image/png',
         dataFechamento: new Date().toISOString()
       });
       onUpdate();
       onClose();
     } catch (err) {
-      console.error('Error finishing service:', err);
-      setError('Erro ao finalizar atendimento. Verifique sua conexão ou permissões.');
+      console.error('[SERVICE ORDER SIGNATURE ERROR]', { orderId: chamado.id, error: err });
+      setSignatureStatus('idle');
+      setError('Não foi possível salvar a assinatura. O atendimento não foi finalizado. Tente novamente.');
     } finally {
       setSaving(false);
     }
@@ -507,9 +530,9 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
               )}
             </div>
             <div className="bg-white rounded-3xl border-2 border-dashed border-surface-container-high overflow-hidden">
-              {chamado.assinaturaCliente ? (
+              {(chamado.customerSignatureUrl || chamado.assinaturaCliente) ? (
                 <div className="h-48 flex items-center justify-center p-4">
-                  <img src={chamado.assinaturaCliente} alt="Assinatura" className="max-h-full" />
+                  <img src={chamado.customerSignatureUrl || chamado.assinaturaCliente} alt="Assinatura" className="max-h-full" />
                 </div>
               ) : chamado.status === 'concluido' ? (
                 <div className="h-48 flex items-center justify-center text-on-surface-variant opacity-40">
@@ -526,6 +549,8 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
                 />
               )}
             </div>
+            {signatureStatus === 'saving' && <p className="text-xs font-bold text-primary flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Salvando assinatura...</p>}
+            {signatureStatus === 'saved' && <p className="text-xs font-bold text-green-700 flex items-center gap-2"><Check size={14} /> Assinatura salva com sucesso.</p>}
           </div>
         </div>
 

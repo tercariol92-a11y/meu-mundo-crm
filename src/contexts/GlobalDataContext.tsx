@@ -1,8 +1,9 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Cliente, Usuario, Lead, Proposta, Tecnico, Produto, EquipamentoCliente, Chamado, Meta, Conversation, AgendaComercial, MotivoPerda, ContaPagar, ContratoRecorrente } from '../types';
 import { databaseService, OperationType, handleFirestoreError, mapDoc } from '../services/databaseService';
-import { collection, onSnapshot } from '../services/resilientFirestoreClient';
+import { collection, onSnapshot, query, where } from '../services/resilientFirestoreClient';
 import { db, auth, onAuthStateChanged } from '../firebase';
+import { isAgendaAdmin, resolveCompanyId } from '../services/commercialAgendaService';
 
 interface GlobalDataContextType {
   clientes: Cliente[];
@@ -131,12 +132,6 @@ export function GlobalDataProvider({ children }: { children: React.ReactNode }) 
       handleFirestoreError(error, OperationType.LIST, 'conversations');
     });
 
-    const unsubAgenda = onSnapshot(collection(db, 'agenda_comercial'), (snap) => {
-      setAgendaComercial(snap.docs.map(doc => mapDoc(doc) as AgendaComercial));
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'agenda_comercial');
-    });
-
     const unsubMotivos = onSnapshot(collection(db, 'motivos_perda'), (snap) => {
       setMotivosPerda(snap.docs.map(doc => mapDoc(doc) as MotivoPerda));
     }, (error) => {
@@ -173,13 +168,40 @@ export function GlobalDataProvider({ children }: { children: React.ReactNode }) 
       unsubChamados();
       unsubMetas();
       unsubConversations();
-      unsubAgenda();
       unsubMotivos();
       unsubContas();
       unsubContratos();
       unsubProdutos();
     };
   }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser || usuarios.length === 0) return;
+    const profile = usuarios.find(u => u.id === currentUser.uid);
+    if (!profile) return;
+    const companyId = resolveCompanyId(profile);
+    const constraints: any[] = [where('companyId', '==', companyId)];
+    if (!isAgendaAdmin(profile)) constraints.push(where('responsibleUserId', '==', currentUser.uid));
+    const modern = new Map<string, AgendaComercial>();
+    const legacy = new Map<string, AgendaComercial>();
+    const publish = () => setAgendaComercial([...modern.values(), ...legacy.values()].filter((item, index, all) => all.findIndex(other => other.id === item.id) === index));
+    const unsubscribers: Array<() => void> = [];
+    unsubscribers.push(onSnapshot(query(collection(db, 'agenda_comercial'), ...constraints), (snap) => {
+      modern.clear();
+      snap.docs.forEach(entry => modern.set(entry.id, mapDoc(entry) as AgendaComercial));
+      publish();
+    }, (error) => {
+      setAgendaComercial([]);
+      handleFirestoreError(error, OperationType.LIST, 'agenda_comercial');
+    }));
+    const legacyOwners = isAgendaAdmin(profile) ? usuarios.filter(u => u.ativo).map(u => u.id) : [currentUser.uid];
+    legacyOwners.forEach(ownerId => unsubscribers.push(onSnapshot(query(collection(db, 'agenda_comercial'), where('responsavelId', '==', ownerId)), (snap) => {
+      [...legacy.entries()].filter(([, item]) => (item.responsavelId || item.responsibleUserId) === ownerId).forEach(([id]) => legacy.delete(id));
+      snap.docs.map(entry => mapDoc(entry) as AgendaComercial).filter(item => !item.companyId).forEach(item => legacy.set(item.id, item));
+      publish();
+    }, error => handleFirestoreError(error, OperationType.LIST, 'agenda_comercial/legacy'))));
+    return () => unsubscribers.forEach(unsubscribe => unsubscribe());
+  }, [currentUser, usuarios]);
 
   const allowedPropostas = React.useMemo(() => {
     if (!currentUser) return [];
@@ -204,6 +226,18 @@ export function GlobalDataProvider({ children }: { children: React.ReactNode }) 
     return propostas.filter(p => p.vendedorId === currentUser.uid || (p as any).createdBy === currentUser.uid || (p as any).usuarioId === currentUser.uid);
   }, [propostas, usuarios, currentUser]);
 
+  const allowedAgenda = React.useMemo(() => {
+    if (!currentUser) return [];
+    const profile = usuarios.find(u => u.id === currentUser.uid);
+    const companyId = resolveCompanyId(profile as any);
+    const admin = isAgendaAdmin(profile as any);
+    return agendaComercial.filter(item => {
+      const ownerId = item.responsibleUserId || item.responsavelId;
+      const itemCompanyId = item.companyId || 'default';
+      return itemCompanyId === companyId && (admin || ownerId === currentUser.uid);
+    });
+  }, [agendaComercial, usuarios, currentUser]);
+
   const refreshData = async (collectionName?: string) => {
     // Snapshots handle refresh
   };
@@ -220,7 +254,7 @@ export function GlobalDataProvider({ children }: { children: React.ReactNode }) 
       chamados,
       metas,
       conversations,
-      agendaComercial,
+      agendaComercial: allowedAgenda,
       motivosPerda,
       contasPagar,
       contratos,

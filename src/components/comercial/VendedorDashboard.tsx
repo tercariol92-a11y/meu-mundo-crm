@@ -21,6 +21,7 @@ import { useGlobalData } from '../../contexts/GlobalDataContext';
 import { databaseService } from '../../services/databaseService';
 import { tasksService } from '../../services/tasksService';
 import MinhasMetasCard from '../gestao/MinhasMetasCard';
+import { appointmentStart, commercialAgendaService } from '../../services/commercialAgendaService';
 
 interface VendedorDashboardProps {
   user: Usuario;
@@ -115,8 +116,28 @@ export default function VendedorDashboard({ user }: VendedorDashboardProps) {
   }, [propostas, selectedUserId]);
 
   const personalAppointments = useMemo(() => {
-    return agendaComercial?.filter(a => a.responsavelId === selectedUserId && a.status === 'Pendente') || [];
+    return (agendaComercial?.filter(a => (a.responsibleUserId || a.responsavelId) === selectedUserId) || [])
+      .sort((a, b) => (appointmentStart(a)?.getTime() || 0) - (appointmentStart(b)?.getTime() || 0));
   }, [agendaComercial, selectedUserId]);
+
+  const agendaStats = useMemo(() => {
+    const now = new Date();
+    const todayKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+    const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
+    const tomorrowKey = `${tomorrow.getFullYear()}-${tomorrow.getMonth()}-${tomorrow.getDate()}`;
+    const weekEnd = new Date(now); weekEnd.setDate(now.getDate() + 7);
+    const key = (date: Date) => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+    const pending = personalAppointments.filter(item => !['Concluído', 'Cancelado', 'Não realizado'].includes(item.status));
+    return {
+      today: pending.filter(item => { const start = appointmentStart(item); return start && key(start) === todayKey; }),
+      tomorrow: pending.filter(item => { const start = appointmentStart(item); return start && key(start) === tomorrowKey; }),
+      late: pending.filter(item => { const start = appointmentStart(item); return start && start < now; }),
+      week: pending.filter(item => { const start = appointmentStart(item); return start && start >= now && start < weekEnd; }),
+      next: pending.find(item => { const start = appointmentStart(item); return start && start >= now; }),
+    };
+  }, [personalAppointments]);
+
+  const openAgenda = () => window.dispatchEvent(new CustomEvent('navigateApp', { detail: { view: 'comercial-agenda' } }));
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
@@ -199,6 +220,14 @@ export default function VendedorDashboard({ user }: VendedorDashboardProps) {
         returnsPendingCount={0}
         ticketsPendingCount={0}
       />
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="bg-primary text-white rounded-3xl p-5"><p className="text-[10px] font-black uppercase tracking-widest opacity-75">Agenda de hoje</p><p className="text-3xl font-black mt-2">{agendaStats.today.length}</p><p className="text-xs">compromissos</p></div>
+        <div className="bg-surface-container-low border rounded-3xl p-5"><p className="text-[10px] font-black uppercase text-on-surface-variant">Próximo</p><p className="text-sm font-black mt-2 line-clamp-1">{agendaStats.next?.titulo || 'Agenda livre'}</p><p className="text-xs text-primary mt-1">{agendaStats.next && appointmentStart(agendaStats.next)?.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</p></div>
+        <div className="bg-red-50 border border-red-100 rounded-3xl p-5"><p className="text-[10px] font-black uppercase text-red-600">Atrasados</p><p className="text-3xl font-black text-red-600 mt-2">{agendaStats.late.length}</p></div>
+        <div className="bg-surface-container-low border rounded-3xl p-5"><p className="text-[10px] font-black uppercase text-on-surface-variant">Amanhã</p><p className="text-3xl font-black mt-2">{agendaStats.tomorrow.length}</p></div>
+        <div className="bg-surface-container-low border rounded-3xl p-5"><p className="text-[10px] font-black uppercase text-on-surface-variant">Próximos 7 dias</p><p className="text-3xl font-black mt-2">{agendaStats.week.length}</p></div>
+      </div>
 
       {/* Main Metrics Panels */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -376,22 +405,22 @@ export default function VendedorDashboard({ user }: VendedorDashboardProps) {
           <div className="flex items-center gap-2 pb-4 border-b border-surface-container-high justify-between">
             <div className="flex items-center gap-3">
               <Calendar className="text-primary" size={20} />
-              <h3 className="text-xs font-black uppercase tracking-[0.2em] text-on-surface">Retornos e Agenda</h3>
+              <h3 className="text-xs font-black uppercase tracking-[0.2em] text-on-surface">Minha Agenda</h3>
             </div>
             <span className="text-[10px] font-black text-amber-700 bg-amber-50 px-2 py-1 rounded-full border border-amber-200">
-              {personalAppointments.length} Pendentes
+              {agendaStats.today.length} Hoje
             </span>
           </div>
 
-          {personalAppointments.length === 0 ? (
+          {agendaStats.today.length === 0 ? (
             <div className="flex flex-col items-center justify-center p-8 text-center text-on-surface-variant h-48">
               <Clock size={28} className="opacity-40 mb-2" />
-              <p className="text-[10px] font-black uppercase tracking-widest opacity-60">Nenhum retorno agendado</p>
-              <p className="text-[9px] mt-1 opacity-50">Sua agenda comercial está livre no momento</p>
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-60">Nenhum compromisso agendado para hoje.</p>
+              <button onClick={openAgenda} className="text-[9px] mt-3 font-black uppercase text-primary">Ver agenda</button>
             </div>
           ) : (
             <div className="space-y-4 max-h-80 overflow-y-auto pr-2">
-              {personalAppointments.map((item: any) => (
+              {agendaStats.today.map((item: any) => (
                 <div 
                   key={item.id} 
                   className="p-4 bg-surface-container-high hover:bg-surface-container-highest rounded-2xl border border-surface-container-highest transition-colors flex justify-between gap-4 items-start"
@@ -406,11 +435,12 @@ export default function VendedorDashboard({ user }: VendedorDashboardProps) {
                     </div>
                   </div>
                   <div className="text-right shrink-0">
-                    <p className="text-[10px] font-black text-on-surface">{new Date(item.data).toLocaleDateString('pt-BR')}</p>
-                    {item.dataHora && <p className="text-[9px] text-on-surface-variant mt-0.5">{item.dataHora}</p>}
+                    <p className="text-[10px] font-black text-on-surface">{appointmentStart(item)?.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</p>
+                    <button onClick={() => commercialAgendaService.updateStatus(item.id, 'Concluído')} className="text-[9px] text-green-700 font-black uppercase mt-2">Concluir</button>
                   </div>
                 </div>
               ))}
+              <button onClick={openAgenda} className="w-full text-[10px] font-black uppercase text-primary py-2">Ver agenda completa</button>
             </div>
           )}
         </div>

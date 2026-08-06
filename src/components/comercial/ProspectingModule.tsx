@@ -97,6 +97,10 @@ export default function ProspectingModule({ user, initialTab = 'buscar', onViewC
     templateId: ''
   });
   const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [selectedLeadForWhatsApp, setSelectedLeadForWhatsApp] = useState<Lead | null>(null);
+  const [whatsAppMessage, setWhatsAppMessage] = useState('');
+  const [whatsAppTemplateId, setWhatsAppTemplateId] = useState('');
+  const [isSendingWhatsApp, setIsSendingWhatsApp] = useState(false);
 
   // Statistics summaries
   const [stats, setStats] = useState({
@@ -163,7 +167,10 @@ export default function ProspectingModule({ user, initialTab = 'buscar', onViewC
 
       // Compute general metrics strictly using real data
       const totalCap = mapped.length;
-      const totalSent = msgList.length;
+      // Somente confirmações reais do serviço WhatsApp entram como envio.
+      // Registros legados "enviado" sem messageId eram simulações locais.
+      const confirmedMessages = msgList.filter(m => m.status === 'sent' && Boolean(m.messageId));
+      const totalSent = confirmedMessages.length;
       const totalReplies = msgList.filter(m => m.status === 'respondeu').length;
       const totalDeals = mapped.filter(l => l.status === 'Qualificado' || l.status === 'Proposta enviada' || l.status === 'Fechado').length;
       
@@ -491,7 +498,9 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
   };
 
   // Manual Trigger Message Sequence to a specific lead
-  const handleSendManualMessageToLead = async (lead: Lead) => {
+  const handleSendManualMessageToLead = (lead: Lead) => {
+    const phone = lead.telefone || lead.whatsapp || '';
+    if (!phone || !phone.replace(/\D/g, '')) { toast.error('Telefone não encontrado para este lead.'); return; }
     const activeTemplate = templates.find(t => t.type === 'whatsapp');
     const msgText = activeTemplate 
       ? activeTemplate.body
@@ -499,24 +508,38 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
           .replace(/\{\{CIDADE\}\}/g, lead.cidade || 'sua cidade')
       : `Olá ${lead.nome}! Gostaríamos de oferecer soluções em segurança para seu negócio.`;
 
+    setSelectedLeadForWhatsApp(lead);
+    setWhatsAppTemplateId(activeTemplate?.id || '');
+    setWhatsAppMessage(msgText);
+  };
+
+  const handleConfirmWhatsAppSend = async () => {
+    const lead = selectedLeadForWhatsApp;
+    if (!lead || isSendingWhatsApp) return;
     try {
-      toast.success(`Disparando WhatsApp para ${lead.nome}...`);
-      await prospectingService.sendManualWhatsApp(
-        lead.id, 
-        lead.nome, 
-        lead.telefone || lead.whatsapp || '', 
-        msgText,
-        user?.nome || user?.email || 'Jefferson'
-      );
+      setIsSendingWhatsApp(true);
+      const result = await prospectingService.sendManualWhatsApp(lead.id, lead.empresa || lead.nome, lead.telefone || lead.whatsapp || '', whatsAppMessage, user.nome || user.email.split('@')[0], user.id, user.email);
       await prospectingService.createLog(
         'Mensagem Manual Enviada', 
-        `Mensagem comercial enviada para "${lead.nome}" via WhatsApp.`, 
+        `Mensagem comercial confirmada pelo WhatsApp para "${lead.nome}". ID: ${result.messageId}.`,
         'success'
       );
-      loadGlobalProspectData();
-    } catch (e) {
-      toast.error('Erro ao disparar.');
+      toast.success(`Mensagem enviada com sucesso para ${lead.empresa || lead.nome}.`);
+      setProspectLeads(current => current.map(item => item.id === lead.id ? { ...item, status: 'Em contato', dataInteracao: new Date().toISOString() } : item));
+      setSelectedLeadForWhatsApp(null);
+      sessionStorage.setItem('atendimento:openLeadId', result.conversationId);
+      onViewChange?.('atendimento');
+    } catch (e: any) {
+      toast.error(e?.message || 'Falha no envio pelo WhatsApp.');
+    } finally {
+      setIsSendingWhatsApp(false);
     }
+  };
+
+  const formatProspectDate = (value: any) => {
+    if (!value) return 'Não informado';
+    const raw = typeof value?.toDate === 'function' ? value.toDate() : typeof value?.seconds === 'number' ? new Date(value.seconds * 1000) : new Date(value);
+    return Number.isNaN(raw.getTime()) ? 'Não informado' : raw.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
 
   return (
@@ -898,7 +921,7 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
                               </span>
                             </td>
                             <td className="py-3 px-4 text-[10px] text-on-surface-variant">
-                              {lead.createdAt ? new Date(lead.createdAt).toLocaleDateString('pt-BR') : '-'}
+                              {formatProspectDate(lead.createdAt || lead.criadoEm)}
                             </td>
                             <td className="py-3 px-4">
                               <div className="flex items-center justify-center gap-1.5">
@@ -1579,6 +1602,28 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
                 Salvar Campanha
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* QUICK WHATSAPP SEND MODAL */}
+      {selectedLeadForWhatsApp && (
+        <div className="fixed inset-0 z-[100] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-xl bg-surface-container-lowest rounded-2xl shadow-2xl border border-surface-container-high overflow-hidden">
+            <div className="p-5 border-b border-surface-container-high flex items-center justify-between">
+              <div><h3 className="text-base font-black text-on-surface">Enviar mensagem via WhatsApp</h3><p className="text-xs text-on-surface-variant mt-1">Revise o conteúdo antes de confirmar o envio real.</p></div>
+              <button type="button" onClick={() => setSelectedLeadForWhatsApp(null)} className="text-on-surface-variant hover:text-on-surface">✕</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="grid sm:grid-cols-2 gap-3 rounded-xl bg-surface p-4 text-xs">
+                <div><span className="text-on-surface-variant">Empresa</span><p className="font-bold mt-1">{selectedLeadForWhatsApp.empresa || selectedLeadForWhatsApp.nome}</p></div>
+                <div><span className="text-on-surface-variant">Telefone</span><p className="font-bold mt-1">{selectedLeadForWhatsApp.telefone || selectedLeadForWhatsApp.whatsapp}</p></div>
+                <div className="sm:col-span-2"><span className="text-on-surface-variant">Responsável</span><p className="font-bold mt-1">{user.nome || user.email.split('@')[0]}</p></div>
+              </div>
+              <div><label className="block text-xs font-bold mb-1.5">Template</label><select value={whatsAppTemplateId} onChange={event => { const id=event.target.value; setWhatsAppTemplateId(id); const template=templates.find(item=>item.id===id); if(template) setWhatsAppMessage(template.body.replace(/\{\{NOME_EMPRESA\}\}/g, selectedLeadForWhatsApp.empresa || selectedLeadForWhatsApp.nome).replace(/\{\{CIDADE\}\}/g, selectedLeadForWhatsApp.cidade || 'sua cidade')); }} className="w-full rounded-xl border border-surface-container-high bg-surface px-3 py-2.5 text-sm"><option value="">Mensagem manual</option>{templates.filter(item=>item.type==='whatsapp').map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+              <div><label className="block text-xs font-bold mb-1.5">Mensagem</label><textarea rows={7} value={whatsAppMessage} onChange={event=>setWhatsAppMessage(event.target.value)} className="w-full rounded-xl border border-surface-container-high bg-surface px-3 py-3 text-sm resize-none" placeholder="Digite a mensagem..." /></div>
+            </div>
+            <div className="p-5 border-t border-surface-container-high flex justify-end gap-3"><button type="button" disabled={isSendingWhatsApp} onClick={()=>setSelectedLeadForWhatsApp(null)} className="px-4 py-2 rounded-xl border border-surface-container-high text-xs font-bold">Cancelar</button><button type="button" disabled={isSendingWhatsApp || !whatsAppMessage.trim()} onClick={handleConfirmWhatsAppSend} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold disabled:opacity-50 flex items-center gap-2">{isSendingWhatsApp ? <><Clock size={14} className="animate-spin" /> Enviando...</> : <><Send size={14} /> Enviar mensagem</>}</button></div>
           </div>
         </div>
       )}

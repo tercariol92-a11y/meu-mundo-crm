@@ -21,6 +21,14 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.role == 'admin';
     }
+
+    function currentCompanyId() {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.companyId != null
+          ? get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.companyId
+          : 'default';
+    }
     
     // Helper function to get customer's linked client ID
     function getCustomerClienteId() {
@@ -34,7 +42,27 @@ service cloud.firestore {
 
     // Default wildcard fallback
     match /{document=**} {
-      allow read, write: if isInternal() && !document.matches('whatsapp_sessions/.*');
+      allow read, write: if isInternal() &&
+        !document.matches('whatsapp_sessions/.*') &&
+        !document.matches('agenda_comercial/.*');
+    }
+
+    match /agenda_comercial/{appointmentId} {
+      allow create: if isInternal() &&
+        request.resource.data.companyId == currentCompanyId() &&
+        (isAdmin() || request.resource.data.responsibleUserId == request.auth.uid);
+      allow read: if isInternal() &&
+        ((resource.data.companyId == currentCompanyId() &&
+          (isAdmin() || resource.data.responsibleUserId == request.auth.uid)) ||
+         (resource.data.companyId == null &&
+          (isAdmin() || resource.data.responsavelId == request.auth.uid)));
+      allow update: if isInternal() &&
+        request.resource.data.companyId == currentCompanyId() &&
+        ((resource.data.companyId == currentCompanyId() &&
+          (isAdmin() || (resource.data.responsibleUserId == request.auth.uid && request.resource.data.responsibleUserId == request.auth.uid))) ||
+         (resource.data.companyId == null &&
+          (isAdmin() || (resource.data.responsavelId == request.auth.uid && request.resource.data.responsibleUserId == request.auth.uid))));
+      allow delete: if isAdmin() && resource.data.companyId == currentCompanyId();
     }
 
     match /whatsapp_sessions/{userId} {

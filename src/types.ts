@@ -44,6 +44,9 @@ export interface VinculoCargoUsuario {
 
 export interface Usuario {
   id: string;
+  companyId?: string;
+  tenantId?: string;
+  empresaId?: string;
   nome: string;
   email: string;
   photoURL?: string;
@@ -394,6 +397,11 @@ export interface Chamado {
   fotos?: string[];
   assinaturaCliente?: string;
   assinaturaData?: string;
+  customerSignatureUrl?: string;
+  customerSignaturePath?: string;
+  customerSignedAt?: string;
+  customerSignedBy?: string;
+  customerSignatureMimeType?: 'image/png';
   pecasUtilizadas?: { nome: string; quantidade: number; valor?: number }[];
   servicoExecutado?: string;
   tempoEstimado?: string;
@@ -518,18 +526,41 @@ export interface MotivoPerda {
 
 export interface AgendaComercial {
   id: string;
+  companyId?: string;
   leadId?: string;
   clienteId?: string;
+  customerId?: string;
+  customerName?: string;
+  clienteNome?: string;
   titulo: string;
+  title?: string;
   descricao?: string;
-  tipo: 'Visita' | 'Ligação' | 'Follow-up' | 'Retorno Proposta' | 'Outro';
+  description?: string;
+  tipo: 'Ligação' | 'Reunião' | 'Visita' | 'Retorno' | 'Demonstração' | 'Instalação' | 'Treinamento' | 'Proposta' | 'Cobrança' | 'Outro' | 'Follow-up' | 'Retorno Proposta';
+  type?: 'Ligação' | 'Reunião' | 'Visita' | 'Retorno' | 'Demonstração' | 'Instalação' | 'Treinamento' | 'Proposta' | 'Cobrança' | 'Outro' | 'Follow-up' | 'Retorno Proposta';
   data: string;
   dataHora?: string;
+  dataInicio?: string;
+  startAt?: any;
+  endAt?: any;
   local?: string;
-  status: 'Pendente' | 'Concluído' | 'Cancelado';
+  address?: string;
+  endereco?: string;
+  phone?: string;
+  telefone?: string;
+  status: 'Agendado' | 'Confirmado' | 'Em andamento' | 'Concluído' | 'Cancelado' | 'Não realizado' | 'Pendente';
+  priority?: 'Baixa' | 'Média' | 'Alta' | 'Urgente';
+  prioridade?: 'Baixa' | 'Média' | 'Alta' | 'Urgente';
   responsavelId: string;
-  createdAt?: string;
-  updatedAt?: string;
+  responsavelNome?: string;
+  responsibleUserId?: string;
+  responsibleUserName?: string;
+  createdByUserId?: string;
+  createdByUserName?: string;
+  reminderMinutes?: number;
+  linkedTaskId?: string;
+  createdAt?: any;
+  updatedAt?: any;
 }
 
 export interface ItemProposta {

@@ -11,9 +11,17 @@ import {
   orderBy, 
   serverTimestamp 
 } from './resilientFirestoreClient';
-import { db } from '../firebase';
+import { db, auth } from '../firebase';
 import { Lead } from '../types';
 import { whatsappApi } from './whatsappApi';
+import { whatsappService } from './whatsapp.service';
+
+export function normalizeProspectPhone(value: string): string {
+  const digits = String(value || '').replace(/\D/g, '');
+  const normalized = digits.startsWith('55') ? digits : `55${digits}`;
+  if (!/^55\d{10,11}$/.test(normalized)) throw new Error('Telefone inválido. Informe DDD e número completos.');
+  return normalized;
+}
 
 export interface ProspectResult {
   id: string;
@@ -72,7 +80,10 @@ export interface MessageLog {
   leadNome: string;
   telefone: string;
   mensagem: string;
-  status: 'enviado' | 'entregue' | 'lido' | 'respondeu';
+  status: 'enviado' | 'sent' | 'entregue' | 'lido' | 'respondeu';
+  messageId?: string;
+  sessionId?: string;
+  firebaseUid?: string;
   tipo: 'whatsapp' | 'email';
   createdAt?: any;
 }
@@ -238,122 +249,41 @@ export const prospectingService = {
     leadNome: string,
     phone: string,
     text: string,
-    attendant: string = 'Jefferson'
+    attendant: string,
+    attendantId: string,
+    attendantEmail = ''
   ) {
-    try {
-      const cleanPhone = phone.replace(/\D/g, '');
-      const normalizedPhone = cleanPhone.startsWith('55') ? cleanPhone : `55${cleanPhone}`;
+    const normalizedPhone = normalizeProspectPhone(phone);
+    if (!text.trim()) throw new Error('Escreva uma mensagem antes de enviar.');
+    const statusResult = await whatsappApi.getStatus();
+    const activeSession = statusResult?.status;
+    if (activeSession?.status !== 'connected' || !activeSession?.sessionId) throw new Error('Nenhum WhatsApp conectado. Acesse Configurações → Meu WhatsApp e conecte uma sessão antes de enviar.');
 
-      // 1. Send the actual WhatsApp message by invoking the API endpoint
-      try {
-        await whatsappApi.sendMessage({
-            telefone: normalizedPhone,
-            mensagem: text.trim(),
-            atendente: attendant
-        });
-      } catch (apiErr) {
-        console.warn('WhatsApp API deliver simulation:', apiErr);
-      }
-
-      // 2. Establish sync/fallback by directly populating CRM 'leads' so it appears in Atendimento Central
-      const qLeads = query(collection(db, 'leads'), where('whatsapp', '==', normalizedPhone));
-      const snapLeads = await getDocs(qLeads);
-
-      let leadDocId = '';
-      const timestamp = serverTimestamp();
-
-      if (!snapLeads.empty) {
-        leadDocId = snapLeads.docs[0].id;
-        await updateDoc(doc(db, 'leads', leadDocId), {
-          ultimaMensagem: text,
-          updatedAt: timestamp,
-          status: 'Em atendimento'
-        });
-      } else {
-        // Create matching lead document under CRM leads collection with normalized phone as ID
-        leadDocId = normalizedPhone;
-        await setDoc(doc(db, 'leads', leadDocId), {
-          nome: leadNome,
-          whatsapp: normalizedPhone,
-          telefone: phone,
-          status: 'Em atendimento',
-          origem: 'WhatsApp - Prospecção',
-          ultimaMensagem: text,
-          updatedAt: timestamp,
-          createdAt: timestamp,
-          unreadCount: 0,
-          responsavelId: attendant
-        });
-      }
-
-      // 3. Save message under the subcollection (leads/{leadDocId}/messages)
-      const messagesRef = collection(db, 'leads', leadDocId, 'messages');
-      await addDoc(messagesRef, {
-        telefone: normalizedPhone,
-        phone: normalizedPhone,
-        direction: 'out',
-        fromMe: true,
-        body: text,
-        mensagem: text,
-        type: 'text',
-        status: 'sent',
-        timestamp: timestamp,
-        createdAt: timestamp,
-        atendente: attendant,
-        sender: attendant
-      });
-
-      // 4. Save to root 'conversations' collection for GlobalDataContext UI synchronization
-      const convRef = doc(db, 'conversations', leadDocId);
-      await setDoc(convRef, {
-        id: leadDocId,
-        phone: normalizedPhone,
-        telefone: phone,
-        contactName: leadNome,
-        leadId: leadDocId,
-        channel: 'whatsapp',
-        status: 'em_atendimento',
-        lastMessageAt: new Date().toISOString(),
-        lastMessageBody: text,
-        lastMessageDirection: 'outbound',
-        lastMessageStatus: 'sent',
-        unreadCount: 0,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        assignedTo: attendant
-      }, { merge: true });
-
-      // 5. Save to root 'whatsapp_chats' collection for absolute backup
-      const chatRef = doc(db, 'whatsapp_chats', leadDocId);
-      await setDoc(chatRef, {
-        chatId: leadDocId,
-        phone: normalizedPhone,
-        name: leadNome,
-        lastMessage: text,
-        lastMessageAt: timestamp,
-        status: 'Em atendimento',
-        updatedAt: timestamp
-      }, { merge: true });
-
-      // 6. Save to root 'whatsapp_messages' for extra robustness
-      await addDoc(collection(db, 'whatsapp_messages'), {
-        conversationId: leadDocId,
-        telefone: normalizedPhone,
-        direction: 'out',
-        fromMe: true,
-        body: text,
-        mensagem: text,
-        status: 'sent',
-        timestamp: timestamp,
-        createdAt: timestamp,
-        atendente: attendant
-      });
-
-      return { success: true };
-    } catch (e) {
-      console.error('Error in sendWhatsAppMessage helper:', e);
-      return { success: false, error: e };
+    const candidates = new Map<string, any>();
+    for (const field of ['telefone', 'whatsapp']) {
+      const result = await getDocs(query(collection(db, 'leads'), where(field, '==', normalizedPhone)));
+      result.docs.forEach(item => candidates.set(item.id, item));
     }
+    const existing = [...candidates.values()].find(item => {
+      const data = item.data();
+      return (data.whatsappSessionId || data.sessionId) === activeSession.sessionId;
+    });
+    const timestamp = serverTimestamp();
+    const leadRef = existing?.ref || doc(collection(db, 'leads'));
+    await setDoc(leadRef, {
+      nome: leadNome || 'Empresa sem nome', telefone: normalizedPhone, whatsapp: normalizedPhone,
+      status: 'Em atendimento', origem: 'WhatsApp - Prospecção', unreadCount: 0,
+      responsavelId: attendantId, assignedUserId: attendantId, assignedUserName: attendant,
+      firebaseUid: activeSession.uid, whatsappOwnerUserId: activeSession.uid,
+      whatsappSessionId: activeSession.sessionId, sessionId: activeSession.sessionId,
+      updatedAt: timestamp, ...(!existing ? { createdAt: timestamp } : {})
+    }, { merge: true });
+
+    const result = await whatsappService.sendMessage(normalizedPhone, text, attendant, {
+      attendantId, attendantEmail, source: 'prospeccao', conversationId: leadRef.id
+    });
+    if (!result?.success || !result?.messageId) throw new Error('O WhatsApp não confirmou o envio da mensagem.');
+    return { success: true, messageId: result.messageId, sessionId: activeSession.sessionId, firebaseUid: activeSession.uid, normalizedPhone, conversationId: leadRef.id };
   },
 
   /**
@@ -364,7 +294,7 @@ export const prospectingService = {
     leadName: string, 
     phone: string, 
     automation: ProspectAutomation,
-    attendant: string = 'Jefferson'
+    attendant: string = 'Atendente'
   ) {
     try {
       const personalizedMsg = automation.mensagemTemplate
@@ -384,7 +314,8 @@ export const prospectingService = {
       });
 
       // Synchronize and send real-time Central Atendimento message
-      await this.sendWhatsAppMessage(leadId, leadName, phone, personalizedMsg, attendant);
+      const currentUser = auth.currentUser;
+      await this.sendWhatsAppMessage(leadId, leadName, phone, personalizedMsg, attendant, currentUser?.uid || '', currentUser?.email || '');
 
       await this.createLog(
         'Automação Disparada', 
@@ -501,26 +432,21 @@ export const prospectingService = {
     }
   },
 
-  async sendManualWhatsApp(leadId: string, leadNome: string, phone: string, text: string, attendant: string = 'Jefferson') {
-    try {
-      await addDoc(collection(db, 'prospectionMessages'), {
-        leadId,
-        leadNome,
-        telefone: phone,
-        mensagem: text,
-        status: 'enviado',
-        tipo: 'whatsapp',
-        createdAt: new Date().toISOString()
-      });
-
-      // Synchronize and send real-time Central Atendimento message
-      await this.sendWhatsAppMessage(leadId, leadNome, phone, text, attendant);
-
-      return { success: true };
-    } catch (e) {
-      console.error(e);
-      return { success: false, error: e };
-    }
+  async sendManualWhatsApp(leadId: string, leadNome: string, phone: string, text: string, attendant: string, attendantId: string, attendantEmail = '') {
+    const result = await this.sendWhatsAppMessage(leadId, leadNome, phone, text, attendant, attendantId, attendantEmail);
+    await addDoc(collection(db, 'prospectionMessages'), {
+      leadId, leadNome, telefone: result.normalizedPhone, mensagem: text, status: 'sent', tipo: 'whatsapp',
+      messageId: result.messageId, sessionId: result.sessionId, firebaseUid: result.firebaseUid,
+      attendantId, attendantName: attendant, createdAt: new Date().toISOString()
+    });
+    const prospectRef = doc(db, 'prospectionLeads', leadId);
+    const prospectSnapshot = await getDoc(prospectRef);
+    await updateDoc(prospectRef, {
+      status: 'Em contato', mensagensEnviadas: Number(prospectSnapshot.data()?.mensagensEnviadas || 0) + 1,
+      ultimoContato: serverTimestamp(), ultimoMessageId: result.messageId, ultimoSessionId: result.sessionId,
+      responsavelId: attendantId, responsavelNome: attendant, updatedAt: serverTimestamp()
+    });
+    return result;
   },
 
   /**

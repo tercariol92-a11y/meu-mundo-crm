@@ -214,6 +214,14 @@ interface AtendimentoViewProps {
 export default function AtendimentoView({ user, onViewChange }: AtendimentoViewProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const requestedLeadId = sessionStorage.getItem('atendimento:openLeadId');
+    if (!requestedLeadId || !conversations.some(conversation => conversation.id === requestedLeadId || conversation.leadId === requestedLeadId)) return;
+    const requestedConversation = conversations.find(conversation => conversation.id === requestedLeadId || conversation.leadId === requestedLeadId);
+    if (requestedConversation) setSelectedId(requestedConversation.id);
+    sessionStorage.removeItem('atendimento:openLeadId');
+  }, [conversations]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [selectedClient, setSelectedClient] = useState<Cliente | null>(null);
   const [searchTerm, setSearchTerm] = useState('');

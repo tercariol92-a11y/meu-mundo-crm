@@ -3,14 +3,17 @@ import { useRef, useState, useEffect } from 'react';
 import { Eraser, Check, X } from 'lucide-react';
 
 interface SignaturePadProps {
-  onSave: (signatureDataUrl: string) => void;
+  onSave: (signatureDataUrl: string) => Promise<void> | void;
   onCancel: () => void;
+  externalError?: string;
 }
 
-export default function SignaturePad({ onSave, onCancel }: SignaturePadProps) {
+export default function SignaturePad({ onSave, onCancel, externalError }: SignaturePadProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [hasSignature, setHasSignature] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -104,12 +107,22 @@ export default function SignaturePad({ onSave, onCancel }: SignaturePadProps) {
     }
   };
 
-  const save = () => {
-    if (!hasSignature) return;
+  const save = async () => {
+    if (!hasSignature) {
+      setError('Solicite a assinatura do cliente antes de finalizar o atendimento');
+      return;
+    }
     const canvas = canvasRef.current;
     if (canvas) {
-      const dataUrl = canvas.toDataURL('image/png');
-      onSave(dataUrl);
+      setSaving(true);
+      setError('');
+      try {
+        await onSave(canvas.toDataURL('image/png'));
+      } catch {
+        setError('Falha ao salvar a assinatura. Tente novamente sem apagar o desenho.');
+      } finally {
+        setSaving(false);
+      }
     }
   };
 
@@ -146,9 +159,11 @@ export default function SignaturePad({ onSave, onCancel }: SignaturePadProps) {
           )}
         </div>
 
+        {(error || externalError) && <p className="px-6 pt-4 text-xs font-bold text-error">{error || externalError}</p>}
         <div className="p-6 bg-surface-container-low border-t border-surface-container-high flex gap-4">
           <button
             onClick={clear}
+            disabled={saving}
             className="flex-1 flex items-center justify-center gap-2 py-4 rounded-2xl border-2 border-outline/30 text-on-surface-variant font-black uppercase tracking-widest active:scale-95 transition-all"
           >
             <Eraser size={20} />
@@ -156,11 +171,11 @@ export default function SignaturePad({ onSave, onCancel }: SignaturePadProps) {
           </button>
           <button
             onClick={save}
-            disabled={!hasSignature}
+            disabled={!hasSignature || saving}
             className="flex-1 flex items-center justify-center gap-2 py-4 rounded-2xl bg-primary text-white font-black uppercase tracking-widest disabled:opacity-50 active:scale-95 transition-all shadow-lg shadow-primary/20"
           >
             <Check size={20} />
-            Salvar
+            {saving ? 'Salvando assinatura...' : 'Salvar'}
           </button>
         </div>
       </motion.div>
