@@ -917,7 +917,27 @@ export interface TarefaHistoricoDiario {
   atrasadas: number;
   percentualConcluido: number;
   pontosDoDia: number;
+  scoreProdutividade?: number;
+  horasProdutivas?: number;
+  tempoMedioConclusaoMinutos?: number;
+  sequenciaMetas?: number;
   updatedAt?: string;
+}
+
+export interface ProductivityMetrics {
+  funcionarioId: string;
+  score: number;
+  nivel: 'Excelente' | 'Atenção' | 'Baixa produtividade';
+  total: number;
+  concluidas: number;
+  pendentes: number;
+  atrasadas: number;
+  checklistPercentual: number;
+  pontos: number;
+  horasProdutivas: number;
+  tempoMedioConclusaoMinutos: number;
+  faltamParaVerde: number;
+  mensagem: string;
 }
 
 export interface PontuacaoUsuario {

@@ -13,8 +13,9 @@ import {
   TarefaHistoricoDiario,
   TarefaLog
 } from '../../types';
-import { tasksService, POINT_VALUES } from '../../services/tasksService';
+import { tasksService, POINT_VALUES, calculateProductivityMetrics } from '../../services/tasksService';
 import { useGlobalData } from '../../contexts/GlobalDataContext';
+import { productivityService, WhatsAppResponseMetric, EmployeeSatisfactionMetric } from '../../services/productivityService';
 import { 
   CheckSquare, 
   Plus, 
@@ -46,6 +47,7 @@ import {
   ChevronDown,
   Info,
   CalendarDays
+  ,Target, Flame, Gauge, Timer, Medal
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
@@ -59,15 +61,18 @@ interface GestaoTarefasViewProps {
 
 export default function GestaoTarefasView({ user }: GestaoTarefasViewProps) {
   const { usuarios } = useGlobalData();
+  const isAdmin = user.role === 'admin' || user.roles?.includes('admin');
 
   // Active Tab: 'tarefas' | 'produtividade' | 'ranking' | 'historico' | 'modelos'
-  const [activeTab, setActiveTab] = useState<'tarefas' | 'produtividade' | 'ranking' | 'historico' | 'modelos'>('tarefas');
+  const [activeTab, setActiveTab] = useState<'tarefas' | 'produtividade' | 'atendimento' | 'ranking' | 'historico' | 'modelos'>('tarefas');
 
   // Real-time Tasks list state
   const [tasks, setTasks] = useState<Tarefa[]>([]);
   const [templates, setTemplates] = useState<ModeloTarefa[]>([]);
   const [scores, setScores] = useState<PontuacaoUsuario[]>([]);
   const [loadingTasks, setLoadingTasks] = useState(true);
+  const [whatsappMetrics, setWhatsappMetrics] = useState<WhatsAppResponseMetric[]>([]);
+  const [satisfactionMetrics, setSatisfactionMetrics] = useState<EmployeeSatisfactionMetric[]>([]);
 
   // Filters State
   const [filterSearch, setFilterSearch] = useState('');
@@ -116,6 +121,8 @@ export default function GestaoTarefasView({ user }: GestaoTarefasViewProps) {
     const unsubScores = tasksService.subscribeScores((newScores) => {
       setScores(newScores);
     });
+    const unsubWhatsApp = productivityService.subscribeWhatsAppMetrics(setWhatsappMetrics);
+    const unsubSatisfaction = productivityService.subscribeSatisfaction(setSatisfactionMetrics);
 
     // Load templates
     tasksService.getTaskTemplates().then(setTemplates);
@@ -123,6 +130,8 @@ export default function GestaoTarefasView({ user }: GestaoTarefasViewProps) {
     return () => {
       unsubTasks();
       unsubScores();
+      unsubWhatsApp();
+      unsubSatisfaction();
     };
   }, []);
 
@@ -130,19 +139,22 @@ export default function GestaoTarefasView({ user }: GestaoTarefasViewProps) {
   useEffect(() => {
     if (selectedHistoryUserId) {
       tasksService.getEmployeeHistory(selectedHistoryUserId).then(setEmployeeHistory);
-    } else if (usuarios && usuarios.length > 0) {
+    } else if (isAdmin && usuarios && usuarios.length > 0) {
       setSelectedHistoryUserId(usuarios[0].id);
+    } else {
+      setSelectedHistoryUserId(user.id);
     }
-  }, [selectedHistoryUserId, usuarios]);
+  }, [selectedHistoryUserId, usuarios, isAdmin, user.id]);
 
   // Available staff list
-  const staffList = useMemo(() => {
-    return usuarios?.filter(u => u.ativo !== false) || [];
-  }, [usuarios]);
+  const allStaff = useMemo(() => usuarios?.filter(u => u.ativo !== false) || [], [usuarios]);
+  const staffList = useMemo(() => isAdmin ? allStaff : allStaff.filter(u => u.id === user.id), [allStaff, isAdmin, user.id]);
+
+  const visibleTasks = useMemo(() => isAdmin ? tasks : tasks.filter(task => task.funcionarioId === user.id), [tasks, isAdmin, user.id]);
 
   // Filtered tasks
   const filteredTasks = useMemo(() => {
-    return tasks.filter(t => {
+    return visibleTasks.filter(t => {
       if (filterSearch && !t.titulo.toLowerCase().includes(filterSearch.toLowerCase()) && !t.descricao?.toLowerCase().includes(filterSearch.toLowerCase())) {
         return false;
       }
@@ -163,19 +175,20 @@ export default function GestaoTarefasView({ user }: GestaoTarefasViewProps) {
       }
       return true;
     });
-  }, [tasks, filterSearch, filterFuncionario, filterEquipe, filterStatus, filterTipo, filterDate]);
+  }, [visibleTasks, filterSearch, filterFuncionario, filterEquipe, filterStatus, filterTipo, filterDate]);
 
   // Productivity Metrics by Employee
   const employeeProductivity = useMemo(() => {
     const todayStr = new Date().toISOString().split('T')[0];
     
-    return staffList.map(u => {
+    return allStaff.map(u => {
       const userTasks = tasks.filter(t => t.funcionarioId === u.id);
       const total = userTasks.length;
       const concluidas = userTasks.filter(t => t.status === 'Concluída').length;
       const pendentes = userTasks.filter(t => t.status === 'Pendente' || t.status === 'Em andamento').length;
       const atrasadas = userTasks.filter(t => (t.status === 'Pendente' || t.status === 'Em andamento') && t.dataFinal < todayStr).length;
-      const percentual = total > 0 ? Math.round((concluidas / total) * 100) : 0;
+      const metrics = calculateProductivityMetrics(tasks, u.id);
+      const percentual = metrics.score;
 
       return {
         id: u.id,
@@ -186,21 +199,36 @@ export default function GestaoTarefasView({ user }: GestaoTarefasViewProps) {
         concluidas,
         pendentes,
         atrasadas,
-        percentual
+        percentual,
+        metrics
       };
     }).sort((a, b) => b.percentual - a.percentual);
-  }, [staffList, tasks]);
+  }, [allStaff, tasks]);
+
+  const rankedProductivity = useMemo(() => [...employeeProductivity].sort((a, b) => b.percentual - a.percentual), [employeeProductivity]);
+  const currentEmployee = useMemo(() => rankedProductivity.find(item => item.id === user.id), [rankedProductivity, user.id]);
+  const currentMetrics = currentEmployee?.metrics || calculateProductivityMetrics(visibleTasks, user.id);
+  const currentRank = Math.max(1, rankedProductivity.findIndex(item => item.id === user.id) + 1);
+  const scoreColor = currentMetrics.score >= 90 ? 'emerald' : currentMetrics.score >= 70 ? 'amber' : 'red';
+  const serviceProductivity = useMemo(() => allStaff.map(person => {
+    const responses = whatsappMetrics.filter(metric => metric.attendantId === person.id);
+    const surveys = satisfactionMetrics.filter(review => (review.attendantId || review.atendenteId) === person.id || (!review.attendantId && !review.atendenteId && (review.attendantName || review.atendente) === person.nome));
+    const averageResponse = responses.length ? Math.round(responses.reduce((sum, item) => sum + Number(item.responseTimeMinutes || 0), 0) / responses.length) : 0;
+    const withinTarget = responses.length ? Math.round(responses.filter(item => item.responseTimeMinutes <= 10).length / responses.length * 100) : 0;
+    const averageRating = surveys.length ? surveys.reduce((sum, item) => sum + Number(item.rating ?? item.nota ?? 0), 0) / surveys.length : 0;
+    return { id: person.id, nome: person.nome, role: person.cargoNome || person.role, atendimentos: responses.length, averageResponse, withinTarget, averageRating, avaliacoes: surveys.length };
+  }), [allStaff, whatsappMetrics, satisfactionMetrics]);
 
   // Overall Task Statistics
   const statsOverview = useMemo(() => {
     const todayStr = new Date().toISOString().split('T')[0];
-    const total = tasks.length;
-    const concluidas = tasks.filter(t => t.status === 'Concluída').length;
-    const pendentes = tasks.filter(t => t.status === 'Pendente' || t.status === 'Em andamento').length;
-    const atrasadas = tasks.filter(t => (t.status === 'Pendente' || t.status === 'Em andamento') && t.dataFinal < todayStr).length;
+    const total = visibleTasks.length;
+    const concluidas = visibleTasks.filter(t => t.status === 'Concluída').length;
+    const pendentes = visibleTasks.filter(t => t.status === 'Pendente' || t.status === 'Em andamento').length;
+    const atrasadas = visibleTasks.filter(t => (t.status === 'Pendente' || t.status === 'Em andamento') && t.dataFinal < todayStr).length;
 
     return { total, concluidas, pendentes, atrasadas };
-  }, [tasks]);
+  }, [visibleTasks]);
 
   // Open Create Task Modal
   const handleOpenCreateModal = (template?: ModeloTarefa) => {
@@ -410,6 +438,44 @@ export default function GestaoTarefasView({ user }: GestaoTarefasViewProps) {
         </div>
       </div>
 
+      {/* Painel pessoal: sempre limitado ao usuário autenticado */}
+      <div className={`rounded-3xl border p-6 shadow-sm bg-gradient-to-br ${scoreColor === 'emerald' ? 'from-emerald-50 to-white border-emerald-200' : scoreColor === 'amber' ? 'from-amber-50 to-white border-amber-200' : 'from-red-50 to-white border-red-200'}`}>
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="space-y-2">
+            <p className="text-sm font-semibold text-on-surface-variant">Bom dia, {user.nome?.split(' ')[0] || 'Colaborador'}!</p>
+            <div className="flex items-end gap-3">
+              <span className={`text-5xl font-black ${scoreColor === 'emerald' ? 'text-emerald-600' : scoreColor === 'amber' ? 'text-amber-600' : 'text-red-600'}`}>{currentMetrics.score}%</span>
+              <span className="pb-2 text-sm font-bold text-on-surface">{currentMetrics.nivel}</span>
+            </div>
+            <p className="text-sm text-on-surface-variant">{currentMetrics.mensagem}</p>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 flex-1 lg:max-w-4xl">
+            {[
+              ['Produtividade hoje', `${currentMetrics.score}%`, Gauge],
+              ['Ranking', `${currentRank}º`, Trophy],
+              ['Concluídas', currentMetrics.concluidas, CheckCircle2],
+              ['Pendentes', currentMetrics.pendentes, Clock],
+              ['Atrasadas', currentMetrics.atrasadas, AlertTriangle],
+              ['Tempo médio', currentMetrics.tempoMedioConclusaoMinutos ? `${currentMetrics.tempoMedioConclusaoMinutos} min` : '—', Timer]
+            ].map(([label, value, Icon]: any) => (
+              <div key={label} className="rounded-2xl bg-white/80 border border-white p-3">
+                <Icon size={16} className="text-primary mb-2" />
+                <p className="text-lg font-black text-on-surface">{value}</p>
+                <p className="text-[10px] font-bold uppercase tracking-wide text-on-surface-variant">{label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="mt-5 h-4 rounded-full bg-white overflow-hidden border border-black/5">
+          <motion.div initial={{ width: 0 }} animate={{ width: `${currentMetrics.score}%` }} className={`h-full ${scoreColor === 'emerald' ? 'bg-emerald-500' : scoreColor === 'amber' ? 'bg-amber-500' : 'bg-red-500'}`} />
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {currentMetrics.score >= 90 && <span className="px-3 py-1.5 rounded-full bg-yellow-100 text-yellow-800 text-xs font-bold"><Medal size={14} className="inline mr-1" /> Meta cumprida</span>}
+          {currentMetrics.atrasadas === 0 && currentMetrics.total > 0 && <span className="px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold"><Target size={14} className="inline mr-1" /> Sem atrasos</span>}
+          {currentMetrics.concluidas >= 5 && <span className="px-3 py-1.5 rounded-full bg-orange-100 text-orange-800 text-xs font-bold"><Flame size={14} className="inline mr-1" /> Ritmo produtivo</span>}
+        </div>
+      </div>
+
       {/* Stats Summary Panel */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-surface-container-lowest border border-surface-container-high rounded-2xl p-4 shadow-sm flex items-center gap-3">
@@ -467,7 +533,7 @@ export default function GestaoTarefasView({ user }: GestaoTarefasViewProps) {
           <span>Tarefas ({filteredTasks.length})</span>
         </button>
 
-        <button
+        {isAdmin && <button
           onClick={() => setActiveTab('produtividade')}
           className={`px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all flex items-center gap-2 ${
             activeTab === 'produtividade'
@@ -477,9 +543,17 @@ export default function GestaoTarefasView({ user }: GestaoTarefasViewProps) {
         >
           <BarChart3 size={16} />
           <span>Produtividade da Equipe</span>
-        </button>
+        </button>}
 
-        <button
+        {isAdmin && <button
+          onClick={() => setActiveTab('atendimento')}
+          className={`px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all flex items-center gap-2 ${activeTab === 'atendimento' ? 'bg-primary text-white shadow-sm' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'}`}
+        >
+          <Timer size={16} />
+          <span>Atendimento e Satisfação</span>
+        </button>}
+
+        {isAdmin && <button
           onClick={() => setActiveTab('ranking')}
           className={`px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all flex items-center gap-2 ${
             activeTab === 'ranking'
@@ -489,7 +563,7 @@ export default function GestaoTarefasView({ user }: GestaoTarefasViewProps) {
         >
           <Trophy size={16} />
           <span>Ranking Diário</span>
-        </button>
+        </button>}
 
         <button
           onClick={() => setActiveTab('historico')}
@@ -527,7 +601,7 @@ export default function GestaoTarefasView({ user }: GestaoTarefasViewProps) {
                 className="px-3 py-2 bg-surface border border-surface-container-high rounded-xl text-xs font-medium focus:ring-2 focus:ring-primary focus:outline-none"
               >
                 <option value="todos">Todos os Funcionários</option>
-                {staffList.map(u => (
+                {(isAdmin ? staffList : staffList.filter(u => u.id === user.id)).map(u => (
                   <option key={u.id} value={u.id}>{u.nome}</option>
                 ))}
               </select>
@@ -765,6 +839,31 @@ export default function GestaoTarefasView({ user }: GestaoTarefasViewProps) {
               </p>
             </div>
 
+            <div className="grid lg:grid-cols-[2fr_1fr] gap-4">
+              <div className="h-72 rounded-2xl border border-surface-container-high bg-surface p-4">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={rankedProductivity.slice(0, 12)}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="nome" tick={{ fontSize: 10 }} interval={0} angle={-18} textAnchor="end" height={58} />
+                    <YAxis domain={[0, 100]} unit="%" tick={{ fontSize: 10 }} />
+                    <Tooltip />
+                    <Bar dataKey="percentual" name="Produtividade" fill="#2563eb" radius={[8, 8, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="rounded-2xl border border-surface-container-high bg-surface p-4 space-y-3">
+                <h3 className="font-bold text-sm flex items-center gap-2"><AlertTriangle size={16} className="text-amber-500" /> Alertas gerenciais</h3>
+                {rankedProductivity.filter(emp => emp.percentual < 70 || emp.atrasadas > 0).length === 0 ? (
+                  <p className="text-xs text-emerald-700 bg-emerald-50 rounded-xl p-3">Equipe dentro dos níveis esperados.</p>
+                ) : rankedProductivity.filter(emp => emp.percentual < 70 || emp.atrasadas > 0).slice(0, 5).map(emp => (
+                  <div key={emp.id} className="rounded-xl bg-red-50 border border-red-100 p-3">
+                    <p className="text-xs font-bold text-red-800">{emp.nome}: {emp.percentual}%</p>
+                    <p className="text-[11px] text-red-700 mt-1">{emp.atrasadas ? `${emp.atrasadas} tarefa(s) vencida(s).` : 'Produtividade abaixo de 70%.'} Revisar prioridades e carga de trabalho.</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div className="space-y-4">
               {employeeProductivity.map((emp) => (
                 <div key={emp.id} className="p-4 bg-surface border border-surface-container-high rounded-xl space-y-2">
@@ -783,7 +882,7 @@ export default function GestaoTarefasView({ user }: GestaoTarefasViewProps) {
                       <span className="text-emerald-600">{emp.concluidas} Concluídas</span>
                       <span className="text-amber-600">{emp.pendentes} Pendentes</span>
                       <span className="text-red-600">{emp.atrasadas} Em atraso</span>
-                      <span className="text-sm font-black text-primary ml-2">{emp.percentual}%</span>
+                      <span className={`text-sm font-black ml-2 ${emp.percentual >= 90 ? 'text-emerald-600' : emp.percentual >= 70 ? 'text-amber-600' : 'text-red-600'}`}>{emp.percentual}% · {emp.percentual >= 90 ? 'Excelente' : emp.percentual >= 70 ? 'Atenção' : 'Crítico'}</span>
                     </div>
                   </div>
 
@@ -794,16 +893,41 @@ export default function GestaoTarefasView({ user }: GestaoTarefasViewProps) {
                       animate={{ width: `${emp.percentual}%` }}
                       transition={{ duration: 0.8 }}
                       className={`h-full rounded-full ${
-                        emp.percentual === 100 
-                          ? 'bg-emerald-500' 
-                          : emp.percentual >= 50 
-                          ? 'bg-primary' 
-                          : 'bg-amber-500'
+                        emp.percentual >= 90
+                          ? 'bg-emerald-500'
+                          : emp.percentual >= 70
+                          ? 'bg-amber-500'
+                          : 'bg-red-500'
                       }`}
                     />
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PAINEL ADMINISTRATIVO: ATENDIMENTO E SATISFAÇÃO */}
+      {activeTab === 'atendimento' && isAdmin && (
+        <div className="space-y-6">
+          <div className="bg-surface-container-lowest border border-surface-container-high rounded-2xl p-6 shadow-sm">
+            <div className="mb-5">
+              <h2 className="text-lg font-bold text-on-surface">Atendimento e Satisfação</h2>
+              <p className="text-xs text-on-surface-variant">Primeira resposta humana por colaborador e avaliações vinculadas ao responsável final.</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead><tr className="border-b border-surface-container-high text-[10px] uppercase text-on-surface-variant"><th className="p-3">Funcionário</th><th className="p-3 text-center">Atendimentos</th><th className="p-3 text-center">Tempo médio</th><th className="p-3 text-center">Dentro da meta</th><th className="p-3 text-center">Nota média</th><th className="p-3 text-center">Avaliações</th><th className="p-3 text-center">Status</th></tr></thead>
+                <tbody className="divide-y divide-surface-container-high">
+                  {serviceProductivity.map(metric => {
+                    const healthyResponse = metric.atendimentos === 0 || metric.averageResponse <= 10;
+                    const healthyRating = metric.avaliacoes === 0 || metric.averageRating >= 4.5;
+                    const status = healthyResponse && healthyRating ? 'Excelente' : metric.averageResponse <= 30 && (metric.avaliacoes === 0 || metric.averageRating >= 3.5) ? 'Atenção' : 'Crítico';
+                    return <tr key={metric.id} className="hover:bg-surface"><td className="p-3"><p className="font-bold">{metric.nome}</p><p className="text-[10px] text-on-surface-variant">{metric.role}</p></td><td className="p-3 text-center font-semibold">{metric.atendimentos}</td><td className="p-3 text-center font-semibold">{metric.atendimentos ? `${metric.averageResponse} min` : '—'}</td><td className="p-3 text-center">{metric.atendimentos ? `${metric.withinTarget}%` : '—'}</td><td className="p-3 text-center font-bold">{metric.avaliacoes ? metric.averageRating.toFixed(1) : '—'}</td><td className="p-3 text-center">{metric.avaliacoes}</td><td className="p-3 text-center"><span className={`px-2.5 py-1 rounded-full font-bold ${status === 'Excelente' ? 'bg-emerald-100 text-emerald-800' : status === 'Atenção' ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'}`}>{status}</span></td></tr>;
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

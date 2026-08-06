@@ -49,6 +49,16 @@ export function validateWhatsAppPhone(rawPhone: unknown): { valid: true; phone: 
 const extract=(m?:proto.IMessage|null):{body:string,type:string,caption?:string}|null=>{if(!m)return null;if(m.ephemeralMessage?.message)return extract(m.ephemeralMessage.message);if(m.viewOnceMessage?.message)return extract(m.viewOnceMessage.message);if(m.viewOnceMessageV2?.message)return extract(m.viewOnceMessageV2.message);if(m.conversation)return{body:m.conversation,type:'text'};if(m.extendedTextMessage?.text)return{body:m.extendedTextMessage.text,type:'text'};if(m.imageMessage)return{body:m.imageMessage.caption||'[Foto recebida]',type:'image',caption:m.imageMessage.caption||''};if(m.videoMessage)return{body:m.videoMessage.caption||'[Vídeo recebido]',type:'video',caption:m.videoMessage.caption||''};if(m.audioMessage)return{body:'[Áudio recebido]',type:'audio'};if(m.documentMessage)return{body:m.documentMessage.caption||m.documentMessage.fileName||'[Documento recebido]',type:'document',caption:m.documentMessage.caption||''};if(m.protocolMessage)return null;return{body:'[Mensagem não textual recebida]',type:'media'}};
 
 async function owner(uid:string){const s=await db?.collection('usuarios').doc(uid).get();const d=s?.exists?s.data():{};return{name:d?.displayName||d?.nome||d?.name||d?.email?.split('@')[0]||'Atendente',email:d?.email||''}}
+const responseWindowId=(sessionId:string,conversationId:string)=>`${sessionId}_${conversationId}`.replace(/[^A-Za-z0-9_-]/g,'_');
+async function recordIncomingResponseWindow(s:WhatsAppSession,conversationId:string,phone:string,contactName:string,assignedUserId:string,assignedUserName:string,messageId:string){
+  const ref=db.collection('whatsapp_response_windows').doc(responseWindowId(s.sessionId,conversationId));
+  await db.runTransaction(async(tx:any)=>{const snap=await tx.get(ref);const current=snap.exists?snap.data():null;if(current?.status==='pending'){tx.set(ref,{messageCount:FieldValue.increment(1),lastIncomingMessageId:messageId,lastIncomingAtMs:Date.now(),updatedAt:FieldValue.serverTimestamp()},{merge:true});return;}tx.set(ref,{firebaseUid:s.userId,sessionId:s.sessionId,conversationId,phone,contactName,assignedUserId,assignedUserName,status:'pending',startedAtMs:Date.now(),firstIncomingMessageId:messageId,lastIncomingMessageId:messageId,messageCount:1,createdAt:FieldValue.serverTimestamp(),updatedAt:FieldValue.serverTimestamp()});});
+}
+async function recordHumanResponse(s:WhatsAppSession,conversationId:string,phone:string,messageId:string,context:Record<string,any>){
+  if(context.manualFromAtendimento!==true)return;
+  const windowRef=db.collection('whatsapp_response_windows').doc(responseWindowId(s.sessionId,conversationId));
+  await db.runTransaction(async(tx:any)=>{const snap=await tx.get(windowRef);if(!snap.exists)return;const waiting=snap.data();if(waiting.status!=='pending'||!waiting.startedAtMs)return;const respondedAtMs=Date.now();const responseTimeMinutes=Math.max(0,Math.round((respondedAtMs-Number(waiting.startedAtMs))/60000));const metricRef=db.collection('whatsapp_response_metrics').doc(messageId);tx.set(metricRef,{firebaseUid:s.userId,sessionId:s.sessionId,conversationId,phone,contactName:waiting.contactName||'',attendantId:String(context.attendantId||s.userId),attendantName:String(context.attendantName||'Atendente'),firstIncomingMessageId:waiting.firstIncomingMessageId,responseMessageId:messageId,messageCount:waiting.messageCount||1,startedAtMs:waiting.startedAtMs,respondedAtMs,responseTimeMinutes,status:'answered',createdAt:FieldValue.serverTimestamp()});tx.set(windowRef,{status:'answered',responseMessageId:messageId,respondedAtMs,responseTimeMinutes,attendantId:String(context.attendantId||s.userId),attendantName:String(context.attendantName||'Atendente'),updatedAt:FieldValue.serverTimestamp()},{merge:true});});
+}
 async function saveSession(s:WhatsAppSession,error=''){if(!db)return;const o=await owner(s.userId);await db.collection('whatsapp_sessions').doc(s.userId).set({userId:s.userId,firebaseUid:s.userId,sessionId:s.sessionId,connectedPhone:s.phone,userName:o.name,userEmail:o.email,phone:s.phone,sessionName:`whatsapp_${s.sessionId}`,status:s.status,qrCodeDataUrl:s.qrCodeDataUrl,lastConnectedAt:s.lastConnectedAt,lastError:error,provider:'baileys',isActive:s.status==='connected',updatedAt:FieldValue.serverTimestamp(),createdAt:FieldValue.serverTimestamp()},{merge:true})}
 async function saveMedia(s: WhatsAppSession, msg: any, scope: string, id: string) {
   const leaf: any = msg.message?.ephemeralMessage?.message || msg.message;
@@ -336,6 +346,7 @@ async function onSessionMessage(s: WhatsAppSession, msg: any) {
       : { status: 'Em atendimento', ...(!msg.key.fromMe ? { unreadCount: FieldValue.increment(1) } : {}) }),
     updatedAt: timestamp
   }, { merge: true });
+  if(!msg.key.fromMe)await recordIncomingResponseWindow(s,leadRef.id,phone,leadData?.nome||msg.pushName||'Contato WhatsApp',leadData?.assignedUserId||s.userId,leadData?.assignedUserName||ownerData.name,messageId);
 }
 
 export function initWhatsAppSessions(database:any,bucket:Bucket|null=null){db=database;mediaBucket=bucket;void initializeExistingSessions()}
@@ -447,6 +458,7 @@ export async function sendSessionMessage(uid:string,destination:string,text:stri
       sender:attendantName,atendente:attendantName,atendenteNome:attendantName,ownerUserId:uid,whatsappOwnerUserId:uid,timestamp,createdAt:timestamp
     },{merge:true});
     await parentRef.set({assignedUserId:String(context.attendantId||uid),assignedUserName:attendantName,lastMessage:cleanText,ultimaMensagem:cleanText,lastMessageId:messageId,lastMessageAt:timestamp,updatedAt:timestamp},{merge:true});
+    if(!isGroup)await recordHumanResponse(s,parentRef.id,phone,messageId,context);
   }
   return{success:true,messageId,jid,remoteJid:jid,whatsappBody,messages:[{id:messageId}]}
 }
@@ -512,6 +524,7 @@ export async function sendSessionMedia(uid:string,destination:string,buffer:Buff
   batch.set(messageRef,messageDocument,{merge:true});
   batch.set(parentRef,{firebaseUid:uid,whatsappOwnerUserId:uid,whatsappSessionId:s.sessionId,sessionId:s.sessionId,connectedPhone:s.phone,sessionPhone:s.phone,jid:chatId,chatId,lastMessage:caption||`[${type}] ${safeFileName}`,ultimaMensagem:caption||`[${type}] ${safeFileName}`,lastMessageId:messageId,lastMessageAt:timestamp,updatedAt:timestamp},{merge:true});
   await batch.commit();
+  if(!isGroup)await recordHumanResponse(s,parentRef.id,phone,messageId,{...context,manualFromAtendimento:true});
   console.log('[MEDIA FIRESTORE SAVE]',{documentId:messageRef.id,messageId,mediaUrl:stored?.mediaUrl||'',type,mediaStatus});
   return{success:true,delivered:true,messageId,chatId,jid:chatId,remoteJid:chatId,canonicalPhone:phone,type,caption,mimeType:mimetype,mimetype,fileName:safeFileName,fileSize:buffer.length,mediaUrl:stored?.mediaUrl||'',thumbnailUrl:type==='image'?(stored?.mediaUrl||''):'',storagePath,timestamp:Date.now(),status:'sent',mediaStatus,mediaError};
 }

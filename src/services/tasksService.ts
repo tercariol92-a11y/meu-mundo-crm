@@ -25,14 +25,69 @@ import {
   ChecklistItem,
   TaskStatus
 } from '../types';
+import type { ProductivityMetrics } from '../types';
 
 export const POINT_VALUES = {
   CONCLUIR_TAREFA: 10,
+  CONCLUIR_ANTES_PRAZO: 5,
+  CHECKLIST_COMPLETO: 5,
+  ATRASO: -10,
+  TAREFA_VENCIDA: -20,
   CRIAR_PROPOSTA: 20,
   FECHAR_VENDA: 50,
   RESPONDER_CHAMADO: 15,
   ATUALIZAR_CRM: 5
 };
+
+const priorityWeight = (priority?: string) => priority === 'Alta' ? 1.35 : priority === 'Baixa' ? 0.85 : 1;
+
+export function calculateProductivityMetrics(tasks: Tarefa[], funcionarioId: string, now = new Date()): ProductivityMetrics {
+  const today = now.toISOString().slice(0, 10);
+  const scoped = tasks.filter(task => task.funcionarioId === funcionarioId && task.dataInicial <= today);
+  const totalWeight = scoped.reduce((sum, task) => sum + priorityWeight(task.prioridade), 0);
+  let earnedWeight = 0;
+  let checklistDone = 0;
+  let checklistTotal = 0;
+  let points = 0;
+  const completionMinutes: number[] = [];
+
+  scoped.forEach(task => {
+    const weight = priorityWeight(task.prioridade);
+    const progress = Math.max(0, Math.min(100, task.percentualConcluido || 0));
+    earnedWeight += weight * progress / 100;
+    checklistDone += task.checklist?.filter(item => item.concluido).length || 0;
+    checklistTotal += task.checklist?.length || 0;
+    if (task.status === 'Concluída') {
+      points += POINT_VALUES.CONCLUIR_TAREFA;
+      if (task.concluidoEm && task.dataFinal && task.concluidoEm.slice(0, 10) <= task.dataFinal) points += POINT_VALUES.CONCLUIR_ANTES_PRAZO;
+      if (task.checklist?.length && task.checklist.every(item => item.concluido)) points += POINT_VALUES.CHECKLIST_COMPLETO;
+      if (task.createdAt && task.concluidoEm) {
+        const duration = (new Date(task.concluidoEm).getTime() - new Date(task.createdAt).getTime()) / 60000;
+        if (Number.isFinite(duration) && duration >= 0) completionMinutes.push(duration);
+      }
+    } else if (task.dataFinal < today) {
+      points += POINT_VALUES.TAREFA_VENCIDA;
+    }
+  });
+
+  const concluidas = scoped.filter(task => task.status === 'Concluída').length;
+  const atrasadas = scoped.filter(task => task.status !== 'Concluída' && task.status !== 'Cancelada' && task.dataFinal < today).length;
+  const pendentes = scoped.filter(task => task.status === 'Pendente' || task.status === 'Em andamento').length;
+  const completionScore = totalWeight ? earnedWeight / totalWeight * 100 : 100;
+  const checklistPercentual = checklistTotal ? checklistDone / checklistTotal * 100 : completionScore;
+  const overduePenalty = scoped.length ? Math.min(45, atrasadas / scoped.length * 100) : 0;
+  const score = Math.round(Math.max(0, Math.min(100, completionScore * .7 + checklistPercentual * .3 - overduePenalty)));
+  const faltamParaVerde = score >= 90 ? 0 : Math.max(1, Math.ceil((90 - score) / Math.max(8, 100 / Math.max(1, scoped.length))));
+  const mensagem = atrasadas > 0 ? `Você possui ${atrasadas} tarefa${atrasadas > 1 ? 's' : ''} vencida${atrasadas > 1 ? 's' : ''}.` : score >= 90 ? 'Excelente trabalho. Continue assim.' : score >= 70 ? `Faltam apenas ${faltamParaVerde} tarefa${faltamParaVerde > 1 ? 's' : ''} para entrar no nível Verde.` : 'Você está abaixo da meta. Priorize as tarefas mais importantes.';
+  const averageMinutes = completionMinutes.length ? Math.round(completionMinutes.reduce((a, b) => a + b, 0) / completionMinutes.length) : 0;
+
+  return {
+    funcionarioId, score, nivel: score >= 90 ? 'Excelente' : score >= 70 ? 'Atenção' : 'Baixa produtividade',
+    total: scoped.length, concluidas, pendentes, atrasadas, checklistPercentual: Math.round(checklistPercentual), pontos: points,
+    horasProdutivas: Math.round(completionMinutes.reduce((a, b) => a + b, 0) / 60 * 10) / 10,
+    tempoMedioConclusaoMinutos: averageMinutes, faltamParaVerde, mensagem
+  };
+}
 
 class TasksService {
   private collectionName = 'tarefas';
