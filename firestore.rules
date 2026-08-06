@@ -7,8 +7,8 @@ service cloud.firestore {
       return request.auth != null && (
         exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) ||
         (request.auth.token.email != null && (
-          request.auth.token.email.endsWith('@mundotechequipamentos.com.br') ||
-          request.auth.token.email.endsWith('@mundotechsolucoes.com.br') ||
+          request.auth.token.email.matches('.*@mundotechequipamentos\\.com\\.br$') ||
+          request.auth.token.email.matches('.*@mundotechsolucoes\\.com\\.br$') ||
           request.auth.token.email.matches('(?i)tercariol92@gmail\\.com') ||
           request.auth.token.email.matches('(?i)jefferson@mundotechsolucoes\\.com\\.br') ||
           request.auth.token.email.matches('(?i)jeferson_tercariol2011@hotmail\\.com')
@@ -41,10 +41,10 @@ service cloud.firestore {
     }
 
     // Default wildcard fallback
-    match /{document=**} {
+    match /{collectionId}/{document=**} {
       allow read, write: if isInternal() &&
-        !document.matches('whatsapp_sessions/.*') &&
-        !document.matches('agenda_comercial/.*');
+        collectionId != 'whatsapp_sessions' &&
+        collectionId != 'agenda_comercial';
     }
 
     match /agenda_comercial/{appointmentId} {
