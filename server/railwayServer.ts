@@ -136,7 +136,15 @@ app.post('/api/whatsapp/send', async (req, res, next) => {
 
     const uid = uidOf(req);
     if (input.satisfactionSurvey !== true) {
-      return res.json(await sendSessionMessage(uid, to, message, input));
+      try {
+        const result=await sendSessionMessage(uid,to,message,input);
+        if(!result.messageId||result.status!=='sent')throw new Error('O Baileys não confirmou o envio real da mensagem.');
+        return res.json(result);
+      } catch(error) {
+        const reason=error instanceof Error?error.message:'Falha ao enviar mensagem pelo WhatsApp.';
+        console.error('[WHATSAPP SEND FAILED]',{firebaseUid:uid,error:reason});
+        return res.status(502).json({success:false,code:'WHATSAPP_SEND_FAILED',error:reason});
+      }
     }
 
     const normalizedPhone = to.replace(/\D/g, '');

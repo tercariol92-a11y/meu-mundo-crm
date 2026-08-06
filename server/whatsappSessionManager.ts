@@ -455,31 +455,42 @@ export async function initializeExistingSessions(){
 }
 export async function sendSessionMessage(uid:string,destination:string,text:string,context:Record<string,any>={}){
   const s=getWhatsAppSession(uid);if(!s?.socket||s.status!=='connected')throw new Error('Sessão WhatsApp do usuário desconectada.');
-  const jid=destination.endsWith('@g.us')?destination:`${destination.replace(/\D/g,'')}@s.whatsapp.net`;
+  const isGroup=destination.endsWith('@g.us');
+  const normalizedPhone=destination.replace(/\D/g,'');
+  if(!isGroup&&!normalizedPhone)throw new Error('Número destinatário inválido.');
+  let jid=isGroup?destination:`${normalizedPhone}@s.whatsapp.net`;
+  if(!isGroup){
+    const availability=await s.socket.onWhatsApp(normalizedPhone);
+    const registered=availability?.find(item=>item.exists&&item.jid);
+    if(!registered?.jid)throw new Error('O número destinatário não possui WhatsApp.');
+    jid=registered.jid;
+  }
   const cleanText=String(text||'').trim();
+  if(!cleanText)throw new Error('A mensagem não pode estar vazia.');
   const attendantName=String(context.attendantName||'').trim();
   const alreadyIdentified=/^\*[^*\n]+:\*\s*\n/.test(cleanText);
   const whatsappBody=context.manualFromAtendimento===true&&attendantName&&!alreadyIdentified?`*${attendantName}:*\n${cleanText}`:cleanText;
   const sent=await s.socket.sendMessage(jid,{text:whatsappBody});
   const messageId=String(sent?.key.id||'');if(!messageId)throw new Error('O WhatsApp não confirmou o messageId do envio.');
+  console.log('[WHATSAPP SEND SUCCESS]',{messageId,remoteJid:jid,sessionId:s.sessionId,firebaseUid:uid});
   if(context.manualFromAtendimento===true){
-    const isGroup=jid.endsWith('@g.us');const phone=phoneOf(jid);const collectionName=isGroup?'whatsapp_groups':'leads';let parentRef:any=null;
+    const phone=phoneOf(jid);const collectionName=isGroup?'whatsapp_groups':'leads';let parentRef:any=null;
     if(isGroup){parentRef=db.collection(collectionName).doc(context.groupId||groupDocId(s.sessionId,jid))}
     else if(context.conversationId){const hinted=await db.collection(collectionName).doc(String(context.conversationId)).get();if(hinted.exists&&hinted.data()?.whatsappSessionId===s.sessionId)parentRef=hinted.ref}
     if(!parentRef){const field=isGroup?'remoteJid':'telefone';const value=isGroup?jid:phone;const match=await db.collection(collectionName).where('whatsappSessionId','==',s.sessionId).where(field,'==',value).limit(1).get();parentRef=match.empty?db.collection(collectionName).doc():match.docs[0].ref}
     const timestamp=FieldValue.serverTimestamp();
     await parentRef.collection('messages').doc(messageId).set({
-      firebaseUid:uid,sessionId:s.sessionId,whatsappSessionId:s.sessionId,connectedPhone:s.phone,sessionPhone:s.phone,jid,chatId:jid,
+      firebaseUid:uid,sessionId:s.sessionId,whatsappSessionId:s.sessionId,connectedPhone:s.phone,sessionPhone:s.phone,jid,remoteJid:jid,chatId:jid,
       messageId,metaMessageId:messageId,conversationId:parentRef.id,telefone:phone,phone,body:cleanText,mensagem:cleanText,text:cleanText,whatsappBody,
       direction:'out',messageDirection:'outbound',fromMe:true,type:'text',status:'sent',senderType:'user',
       attendantId:String(context.attendantId||uid),attendantName,attendantEmail:String(context.attendantEmail||''),
       sentBy:String(context.attendantId||uid),sentByUserId:String(context.attendantId||uid),sentByName:attendantName,
-      sender:attendantName,atendente:attendantName,atendenteNome:attendantName,ownerUserId:uid,whatsappOwnerUserId:uid,timestamp,createdAt:timestamp
+      sender:attendantName,atendente:attendantName,atendenteNome:attendantName,ownerUserId:uid,whatsappOwnerUserId:uid,timestamp,sentAt:timestamp,createdAt:timestamp
     },{merge:true});
     await parentRef.set({assignedUserId:String(context.attendantId||uid),assignedUserName:attendantName,lastMessage:cleanText,ultimaMensagem:cleanText,lastMessageId:messageId,lastMessageAt:timestamp,updatedAt:timestamp},{merge:true});
     if(!isGroup)await recordHumanResponse(s,parentRef.id,phone,messageId,context);
   }
-  return{success:true,messageId,jid,remoteJid:jid,whatsappBody,messages:[{id:messageId}]}
+  return{success:true,messageId,sessionId:s.sessionId,firebaseUid:uid,jid,remoteJid:jid,whatsappBody,status:'sent',messages:[{id:messageId}]}
 }
 export async function sendSessionMedia(uid:string,destination:string,buffer:Buffer,mimetype:string,fileName:string,caption='',context:Record<string,string>={}){
   const s=getWhatsAppSession(uid);

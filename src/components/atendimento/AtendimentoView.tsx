@@ -635,29 +635,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
     
     const { attendantName, attendantId, attendantEmail } = getAttendantIdentity(user);
 
-    // Optimistic UI update
-    const optimisticMsg: ChatMessage = {
-      id: 'optimistic-' + Date.now(),
-      conversationId: selectedId,
-      body: messageTextTrim,
-      direction: 'out',
-      fromMe: true,
-      sender: attendantName,
-      atendente: attendantName,
-      attendantName,
-      attendantId,
-      attendantEmail,
-      senderType: 'user',
-      timestamp: new Date().toISOString(),
-      status: 'sending',
-      type: 'text'
-    };
-    
-    setMessages(prev => [...prev, optimisticMsg]);
-    setMessageText('');
-
     try {
-      // Usando telefoneWhatsApp e messageTextTrim conforme solicitado
       const res = await whatsappService.sendMessage(telefoneWhatsApp, messageTextTrim, attendantName, {
         attendantId,
         attendantEmail,
@@ -666,12 +644,14 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
         isGroup: Boolean(selectedConversation.isGroup),
         groupId: selectedConversation.groupId
       });
-      if (!res?.messageId) throw new Error('O Baileys não confirmou o messageId do envio.');
+      if (!res?.success || !res?.messageId || res?.status !== 'sent') {
+        throw new Error('O Baileys não confirmou o envio real da mensagem.');
+      }
+      setMessageText('');
     } catch (error: any) {
       console.error('Erro ao enviar mensagem:', error);
       setError(error.message || 'Erro ao enviar mensagem');
       setMessageText(messageTextTrim);
-      setMessages(prev => prev.filter(m => m.id !== optimisticMsg.id));
       setTimeout(() => setError(null), 5000);
     }
   };
