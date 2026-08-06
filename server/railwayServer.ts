@@ -9,6 +9,7 @@ import {
   disconnectWhatsApp,
   getSessionProfilePicture,
   getWhatsAppStatus,
+  generateWhatsAppQr,
   initWhatsAppSessions,
   reconnectWhatsApp,
   sendSessionMedia,
@@ -40,7 +41,7 @@ const firebaseDatabaseId = process.env.FIREBASE_DATABASE_ID?.trim();
 const db = firebaseDatabaseId ? getFirestore(firebaseApp, firebaseDatabaseId) : getFirestore(firebaseApp);
 const mediaBucket = configuredStorageBucket ? getStorage(firebaseApp).bucket(configuredStorageBucket) : null;
 let storageAvailable = false;
-initWhatsAppSessions(db, mediaBucket);
+const sessionInitialization = initWhatsAppSessions(db, mediaBucket);
 const app = express();
 const operationLocks = new Map<string, Promise<unknown>>();
 
@@ -68,6 +69,16 @@ app.get('/health', (_req, res) => res.status(200).json({
   storageAvailable
 }));
 
+app.use('/api/whatsapp', async (_req, res, next) => {
+  try {
+    await sessionInitialization;
+    next();
+  } catch (error) {
+    console.error('[Railway WhatsApp] falha ao restaurar sessões:', error instanceof Error ? error.message : 'erro desconhecido');
+    return res.status(503).json({ success: false, code: 'WHATSAPP_SESSIONS_NOT_READY', error: 'As sessões do WhatsApp ainda não estão disponíveis.' });
+  }
+});
+
 type Principal = { uid: string; isAdmin: boolean };
 declare global { namespace Express { interface Request { whatsappPrincipal?: Principal } } }
 
@@ -82,8 +93,10 @@ app.use('/api/whatsapp', async (req, res, next) => {
     const profile = profileSnapshot.exists ? profileSnapshot.data() || {} : {};
     const role = String(profile.role || '').toLowerCase();
     const roles = Array.isArray(profile.roles) ? profile.roles.map((value: unknown) => String(value).toLowerCase()) : [];
-    const internalRoles = ['admin','administrador','tecnico','vendedor','financeiro','suporte','gerente_comercial','gerente'];
-    const isInternal = profile.userType === 'internal' || internalRoles.includes(role) || roles.some((value: string) => internalRoles.includes(value));
+    const internalRoles = ['admin','administrador','administrativo','tecnico','técnico','vendedor','financeiro','suporte','atendimento','gerente_comercial','gerente'];
+    const email=String(decoded.email||profile.email||'').toLowerCase();
+    const trustedInternalDomain=email.endsWith('@mundotechequipamentos.com.br')||email.endsWith('@mundotechsolucoes.com.br');
+    const isInternal = profile.userType === 'internal' || internalRoles.includes(role) || roles.some((value: string) => internalRoles.includes(value)) || trustedInternalDomain;
     if (!isInternal) return res.status(403).json({ success: false, error: 'Acesso permitido somente para usuários internos.' });
     req.whatsappPrincipal = { uid: decoded.uid, isAdmin: role === 'admin' || role === 'administrador' || roles.includes('admin') || profile.isAdmin === true };
     next();
@@ -104,7 +117,7 @@ async function locked<T>(uid: string, operation: () => Promise<T>): Promise<T> {
 
 app.get('/api/whatsapp/qr/status', (req, res) => res.json({ success: true, status: getWhatsAppStatus(uidOf(req)) }));
 app.post('/api/whatsapp/qr/connect', async (req, res, next) => { try { const uid=uidOf(req);await locked(uid,()=>connectWhatsApp(uid));res.status(202).json({success:true,status:getWhatsAppStatus(uid)}); } catch(error){next(error)} });
-app.post('/api/whatsapp/qr/generate', async (req, res, next) => { try { const uid=uidOf(req);await locked(uid,()=>connectWhatsApp(uid));res.status(202).json({success:true,status:getWhatsAppStatus(uid)}); } catch(error){next(error)} });
+app.post('/api/whatsapp/qr/generate', async (req, res, next) => { try { const uid=uidOf(req);await locked(uid,()=>generateWhatsAppQr(uid));res.status(202).json({success:true,status:getWhatsAppStatus(uid)}); } catch(error){next(error)} });
 app.post('/api/whatsapp/qr/reconnect', async (req, res, next) => { try { const uid=uidOf(req);await locked(uid,()=>reconnectWhatsApp(uid));res.status(202).json({success:true,status:getWhatsAppStatus(uid)}); } catch(error){next(error)} });
 app.post('/api/whatsapp/qr/disconnect', async (req, res, next) => {
   try {

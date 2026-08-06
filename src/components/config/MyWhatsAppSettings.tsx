@@ -4,7 +4,7 @@ import { AlertCircle, CheckCircle2, Loader2, Power, QrCode, RefreshCw, Smartphon
 import { auth } from '../../firebase';
 import { whatsappApi } from '../../services/whatsappApi';
 
-type OwnSessionStatus = 'connected' | 'disconnected' | 'connecting' | 'qrcode';
+type OwnSessionStatus = 'connected' | 'disconnected' | 'connecting' | 'qrcode' | 'error';
 type OwnSession = {
   uid?: string;
   userId?: string;
@@ -14,6 +14,7 @@ type OwnSession = {
   phone?: string;
   qrCodeDataUrl?: string;
   lastConnectedAt?: string | null;
+  lastError?: string;
 };
 
 export default function MyWhatsAppSettings() {
@@ -35,13 +36,14 @@ export default function MyWhatsAppSettings() {
   };
 
   const pollOwnStatus = async () => {
-    const deadline = Date.now() + 45_000;
+    const deadline = Date.now() + 100_000;
     while (Date.now() < deadline) {
       await new Promise(resolve => window.setTimeout(resolve, 750));
       const body = await whatsappApi.getStatus();
       applyStatus(body.status || {});
       if (body.status?.status === 'qrcode' && body.status?.qrCodeDataUrl) return 'qrcode';
       if (body.status?.status === 'connected') return 'connected';
+      if (body.status?.status === 'error') throw new Error(body.status?.lastError === 'QR_CODE_EXPIRED' ? 'O QR Code expirou. Gere um novo código.' : 'Não foi possível iniciar sua sessão do WhatsApp. Tente gerar um novo QR Code.');
     }
     throw new Error('Tempo esgotado aguardando o WhatsApp. Tente novamente.');
   };
@@ -69,7 +71,7 @@ export default function MyWhatsAppSettings() {
     if (loading) return;
     setLoading(true); setError(''); setSuccess('');
     try {
-      const body = await whatsappApi.getQr(action);
+      const body = await whatsappApi.getQr(action === 'connect' ? 'generate' : 'reconnect');
       if (body.status) applyStatus(body.status);
       const result = await pollOwnStatus();
       setSuccess(result === 'connected' ? 'Seu WhatsApp foi conectado.' : 'QR Code gerado. Leia-o no seu WhatsApp.');
@@ -115,7 +117,7 @@ export default function MyWhatsAppSettings() {
           <div>
             <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Status da minha sessão</p>
             <p className="text-lg font-black uppercase text-on-surface">
-              {status === 'connected' ? 'Sessão conectada' : status === 'qrcode' ? 'Aguardando leitura' : status === 'connecting' ? 'Conectando...' : 'Nenhuma sessão conectada'}
+              {status === 'connected' ? 'Sessão conectada' : status === 'qrcode' ? 'Aguardando leitura' : status === 'connecting' ? 'Conectando...' : status === 'error' ? 'Falha ao gerar QR Code' : 'Nenhuma sessão conectada'}
             </p>
             {phone && <p className="text-xs font-mono font-bold text-success mt-1">Número conectado: {phone}</p>}
             {session?.lastConnectedAt && <p className="text-[10px] text-on-surface-variant mt-1">Última conexão: {session.lastConnectedAt}</p>}
