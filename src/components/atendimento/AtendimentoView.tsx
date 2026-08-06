@@ -172,7 +172,19 @@ function IncomingImage({ message }: { message: ChatMessage }) {
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const legacyMessage = message as ChatMessage & { messageId?: string; imageUrl?: string; fileUrl?: string; url?: string };
-  const mediaUrl = whatsappApi.resolveMediaUrl(legacyMessage);
+  const persistedMediaUrl = whatsappApi.resolveMediaUrl(legacyMessage);
+  const [recoveredMediaUrl, setRecoveredMediaUrl] = useState<string | null>(null);
+  const mediaUrl = recoveredMediaUrl || persistedMediaUrl;
+  const recoverStoredMedia = useCallback(async () => {
+    const messageId = String(legacyMessage.messageId || message.id || '');
+    const storagePath = String(message.storagePath || '');
+    const sessionId = String(message.sessionId || '');
+    if (!messageId || !storagePath || !sessionId || recoveredMediaUrl) return;
+    try { const blob=await whatsappApi.loadStoredMedia(messageId,storagePath,sessionId);setRecoveredMediaUrl(URL.createObjectURL(blob));setFailed(false);setLoading(true); }
+    catch(error){console.error('[MEDIA LOAD ERROR]',{messageId,sessionId,storagePath,error:error instanceof Error?error.message:'erro desconhecido'});setFailed(true)}
+  }, [legacyMessage.messageId, message.id, message.sessionId, message.storagePath, recoveredMediaUrl]);
+  useEffect(() => () => { if(recoveredMediaUrl) URL.revokeObjectURL(recoveredMediaUrl); }, [recoveredMediaUrl]);
+  useEffect(() => { if(!persistedMediaUrl) void recoverStoredMedia(); }, [persistedMediaUrl, recoverStoredMedia]);
   useEffect(() => {
     console.log('[MEDIA RENDER]', { messageId: legacyMessage.messageId || message.id, type: message.type, mediaUrl, thumbnailUrl: message.thumbnailUrl || '' });
   }, [legacyMessage.messageId, message.id, message.type, mediaUrl, message.thumbnailUrl]);
@@ -188,7 +200,7 @@ function IncomingImage({ message }: { message: ChatMessage }) {
         alt={message.caption || message.fileName || 'Imagem recebida'}
         className={`w-full max-w-[360px] max-h-[420px] object-contain transition-opacity ${loading ? 'opacity-0' : 'opacity-100'}`}
         onLoad={() => setLoading(false)}
-        onError={() => { setLoading(false); setFailed(true); }}
+        onError={() => { setLoading(false);void recoverStoredMedia(); }}
       />
     </a>
   );

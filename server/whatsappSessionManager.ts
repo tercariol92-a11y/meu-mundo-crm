@@ -30,8 +30,8 @@ async function persistPublicFile(buffer:Buffer,storagePath:string,contentType:st
   const file=bucket.file(storagePath);
   await file.save(buffer,{resumable:false,metadata:{contentType,cacheControl:'public,max-age=86400',metadata:{firebaseStorageDownloadTokens:token,...metadata}}});
   if(useSignedUrl){
-    const [signedUrl]=await file.getSignedUrl({action:'read',expires:Date.now()+7*24*60*60*1000});
-    console.log('[PROFILE PICTURE SIGNED URL]',{storagePath,expiresInDays:7,success:true});
+    const [signedUrl]=await file.getSignedUrl({action:'read',expires:Date.now()+24*60*60*1000});
+    console.log('[STORAGE SIGNED URL]',{storagePath,expiresInHours:24,success:true});
     return {mediaUrl:signedUrl,storagePath};
   }
   const mediaUrl=`https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(token)}`;
@@ -68,7 +68,7 @@ async function saveMedia(s: WhatsAppSession, msg: any, scope: string, id: string
     const fileName = receivedName.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 160) || `${defaultBaseName}.${extension}`;
     const storagePath = `whatsapp-sessions/${s.userId}/${s.sessionId}/media/${scope}/${id}/${fileName}`;
     console.log(`[WhatsApp Media] mídia baixada; messageId=${id}; bytes=${buffer.length}`);
-    const stored=await persistPublicFile(buffer,storagePath,mimetype,{fileName,telefone:scope,messageId:id,origem:'WhatsApp QR Code',ownerUserId:s.userId});
+    const stored=await persistPublicFile(buffer,storagePath,mimetype,{fileName,telefone:scope,messageId:id,origem:'WhatsApp QR Code',ownerUserId:s.userId},true);
     console.log(`[WhatsApp Media] upload concluído; messageId=${id}; path=${storagePath}`);
     return {
       mediaUrl:stored.mediaUrl,
@@ -489,7 +489,7 @@ export async function sendSessionMedia(uid:string,destination:string,buffer:Buff
   let mediaStatus='ready';
   let mediaError='';
   try{
-    stored=await persistPublicFile(buffer,storagePath,mimetype,{fileName:safeFileName,chatId,messageId,origem:'WhatsApp QR Code',ownerUserId:uid});
+    stored=await persistPublicFile(buffer,storagePath,mimetype,{fileName:safeFileName,chatId,messageId,origem:'WhatsApp QR Code',ownerUserId:uid},true);
   }catch(error){
     const safeError=error instanceof Error?error.message:'Falha de armazenamento';
     mediaStatus='media_storage_failed';

@@ -129,6 +129,13 @@ export const whatsappApi = {
     const response = await fetch(mediaUrl);
     if (!response.ok) throw new Error(`Não foi possível baixar a mídia. HTTP ${response.status}.`);
     return response.blob();
+  },
+
+  async loadStoredMedia(messageId: string, storagePath: string, sessionId: string) {
+    const search = new URLSearchParams({ storagePath, sessionId });
+    const response = await authenticatedRequest(`/api/whatsapp/media/${encodeURIComponent(messageId)}?${search.toString()}`);
+    if (!response.ok) throw new Error(`Não foi possível carregar a mídia. HTTP ${response.status}.`);
+    return response.blob();
   }
 };
 

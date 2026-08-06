@@ -222,6 +222,17 @@ app.get('/api/whatsapp/profile-picture/:jid', async (req,res,next) => {
   }
 });
 
+app.get('/api/whatsapp/media/:messageId', async (req,res,next) => {
+  try {
+    const uid=uidOf(req);const sessionId=String(req.query.sessionId||'');const storagePath=String(req.query.storagePath||'');
+    const requiredPrefix=`whatsapp-sessions/${uid}/${sessionId}/media/`;
+    if(!sessionId||!storagePath.startsWith(requiredPrefix)||!storagePath.includes(`/${req.params.messageId}/`))return res.status(403).json({success:false,error:'Mídia não pertence à sessão autenticada.'});
+    if(!mediaBucket)return res.status(503).json({success:false,error:'Storage não configurado.'});const file=mediaBucket.file(storagePath);const [exists]=await file.exists();if(!exists)return res.status(404).json({success:false,error:'Mídia não encontrada.'});
+    const [metadata]=await file.getMetadata();const [buffer]=await file.download();
+    res.setHeader('Content-Type',String(metadata.contentType||'application/octet-stream'));res.setHeader('Cache-Control','private, max-age=3600');return res.status(200).send(buffer);
+  }catch(error){next(error)}
+});
+
 app.use('/api', (req,res) => res.status(404).json({success:false,error:`Endpoint ${req.method} ${req.path} não encontrado.`}));
 app.use((error:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{console.error('[Railway WhatsApp] erro:',error instanceof Error?error.message:'erro desconhecido');res.status(500).json({success:false,error:error instanceof Error?error.message:'Falha interna no serviço WhatsApp.'})});
 
