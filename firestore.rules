@@ -19,15 +19,22 @@ service cloud.firestore {
     function isAdmin() {
       return request.auth != null &&
         exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.role == 'admin';
+        (
+          get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.get('role', '') in ['admin', 'gerente', 'gerente_comercial'] ||
+          get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.get('roles', []).hasAny(['admin', 'gerente', 'gerente_comercial'])
+        );
     }
 
     function currentCompanyId() {
-      return request.auth != null &&
-        exists(/databases/$(database)/documents/usuarios/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.companyId != null
-          ? get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.companyId
-          : 'default';
+      return request.auth != null && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.get(
+            'companyId',
+            get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.get(
+              'tenantId',
+              get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.get('empresaId', 'default')
+            )
+          )
+        : 'default';
     }
     
     // Helper function to get customer's linked client ID
