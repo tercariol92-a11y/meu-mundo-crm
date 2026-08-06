@@ -208,6 +208,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
   const [messageText, setMessageText] = useState('');
   const [loading, setLoading] = useState(true);
   const [activeSessionId, setActiveSessionId] = useState<string>('');
+  const [sessionAvatarUrls, setSessionAvatarUrls] = useState<Record<string, string>>({});
   const [users, setUsers] = useState<Usuario[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const conversationSnapshotReady = useRef(false);
@@ -223,10 +224,11 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
 
   useEffect(() => {
     requestedProfilePictures.current.clear();
+    setSessionAvatarUrls({});
   }, [activeSessionId]);
 
   const requestConversationAvatar = useCallback(async (conversation: Conversation, refresh = false) => {
-    if (!activeSessionId || (!refresh && getConversationAvatar(conversation))) return;
+    if (!activeSessionId || (!refresh && (sessionAvatarUrls[conversation.id] || getConversationAvatar(conversation)))) return;
     const rawJid = String(conversation.remoteJid || conversation.lead?.whatsappJid || conversation.lead?.profilePictureJid || conversation.phone || '').trim();
     const contactId = String(conversation.isGroup ? (conversation.groupId || conversation.id) : (conversation.leadId || conversation.lead?.id || conversation.id)).replace(/^group:/, '');
     if (!rawJid || !contactId) return;
@@ -240,6 +242,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
       // The permanent Storage path may remain identical after its contents are renewed.
       // A view-only version parameter resets the failed <img> state without changing Firestore.
       const profilePictureUrl = refresh ? withAvatarCacheVersion(storedProfilePictureUrl) : storedProfilePictureUrl;
+      setSessionAvatarUrls(current => ({ ...current, [conversation.id]: profilePictureUrl }));
       setConversations(current => current.map(item => {
         if (item.id !== conversation.id) return item;
         return item.isGroup
@@ -249,7 +252,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
     } catch {
       // Ausência ou privacidade da foto mantém as iniciais sem interromper o atendimento.
     }
-  }, [activeSessionId, user.id]);
+  }, [activeSessionId, sessionAvatarUrls, user.id]);
 
   useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
 
@@ -1175,7 +1178,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                 <div className="relative shrink-0 transition-transform group-hover:scale-105">
                   <ContactAvatarUploader 
                     leadId={conv.leadId || ''} 
-                    photoURL={getConversationAvatar(conv)} 
+                    photoURL={sessionAvatarUrls[conv.id] || getConversationAvatar(conv)}
                     name={conv.contactName} 
                     size="md" 
                     editable={false} 
@@ -1286,7 +1289,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                   <div className="relative group/avatar">
                     <ContactAvatarUploader 
                       leadId={selectedConversation.leadId || ''} 
-                      photoURL={getConversationAvatar(selectedConversation)} 
+                      photoURL={sessionAvatarUrls[selectedConversation.id] || getConversationAvatar(selectedConversation)}
                       onImageError={() => void requestConversationAvatar(selectedConversation, true)}
                       name={selectedConversation.contactName} 
                       size="sm" 
@@ -1787,7 +1790,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                 <div className="relative group/avatar-sidebar">
                   <ContactAvatarUploader 
                     leadId={selectedConversation.leadId || ''} 
-                    photoURL={getAvatarUrl(selectedConversation.lead)} 
+                    photoURL={sessionAvatarUrls[selectedConversation.id] || getAvatarUrl(selectedConversation.lead)}
                     onImageError={() => void requestConversationAvatar(selectedConversation, true)}
                     name={selectedConversation.contactName} 
                     size="xl" 
@@ -2605,7 +2608,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                 <div className="flex flex-col items-center pb-6 border-b border-[#f0f2f5]">
                   <ContactAvatarUploader 
                     leadId={selectedConversation.leadId || ''} 
-                    photoURL={getAvatarUrl(selectedConversation.lead)} 
+                    photoURL={sessionAvatarUrls[selectedConversation.id] || getAvatarUrl(selectedConversation.lead)}
                     onImageError={() => void requestConversationAvatar(selectedConversation, true)}
                     name={selectedConversation.lead.nome} 
                     size="xl" 

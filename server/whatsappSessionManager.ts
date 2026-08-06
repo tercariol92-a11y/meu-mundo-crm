@@ -106,7 +106,10 @@ async function refreshContactAvatar(s: WhatsAppSession, msg: any, phone: string,
       const response = await fetch(temporaryUrl);
       if (!response.ok) throw new Error(`download HTTP ${response.status}`);
       const buffer = Buffer.from(await response.arrayBuffer());
-      const contentType = response.headers.get('content-type') || 'image/jpeg';
+      // WhatsApp's profile CDN may answer with application/octet-stream even
+      // though profilePictureUrl(..., 'image') returns JPEG bytes. Persisting
+      // that header makes browsers refuse the avatar as an <img>.
+      const contentType = 'image/jpeg';
       const storagePath = `whatsapp-sessions/${s.userId}/${s.sessionId}/profile-pictures/${phone}.jpg`;
       const stored=await persistPublicFile(buffer,storagePath,contentType,{telefone:phone,origem:'WhatsApp QR Code',ownerUserId:s.userId});
       const permanentUrl=stored.mediaUrl;
@@ -181,7 +184,9 @@ export async function getSessionProfilePicture(uid:string,rawJid:string,force=fa
       throw new Error(`PROFILE_DOWNLOAD_HTTP_${response.status}`);
     }
     const buffer=Buffer.from(await response.arrayBuffer());
-    const contentType=response.headers.get('content-type')||'image/jpeg';
+    // Profile pictures returned in image mode are JPEGs. Do not propagate the
+    // temporary CDN's generic application/octet-stream header to Storage.
+    const contentType='image/jpeg';
     const safeJid=jid.replace(/[^A-Za-z0-9@._-]/g,'_');
     const stored=await persistPublicFile(buffer,`whatsapp-sessions/${uid}/${s.sessionId}/profile-pictures/${safeJid}.jpg`,contentType,{jid,phone,origem:'WhatsApp QR Code',ownerUserId:uid,sessionId:s.sessionId});
     await ref.set({...baseFields,profilePictureUrl:stored.mediaUrl,profilePictureStoragePath:`whatsapp-sessions/${uid}/${s.sessionId}/profile-pictures/${safeJid}.jpg`,profilePictureStatus:'ready'},{merge:true});
