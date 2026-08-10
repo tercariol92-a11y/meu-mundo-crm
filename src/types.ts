@@ -1259,8 +1259,56 @@ export interface ContratoRecorrente {
   reajusteAnual?: boolean;
   indiceReajuste?: string;
   itens?: ContratoItem[];
+  emitirNfseRecorrente?: boolean;
+  fiscal?: {
+    descricaoServico: string;
+    codigoServicoMunicipal: string;
+    itemLc116: string;
+    cnae?: string;
+    nbs?: string;
+    aliquotaIss: number;
+    issRetido: boolean;
+    municipioPrestacao: string;
+    naturezaOperacao?: string;
+    declaracaoAdicional?: string;
+    valorNfse: number;
+    gerarBoleto: boolean;
+  };
   createdAt?: string;
   updatedAt?: string;
+}
+
+export type RecurringBillingStatus = 'PENDENTE' | 'PENDENCIA_CADASTRAL' | 'PRONTO_PARA_EMITIR' | 'EM_PROCESSAMENTO' | 'AUTORIZADA' | 'REJEITADA' | 'CANCELADA';
+
+export interface FaturamentoRecorrente {
+  id: string;
+  logicalKey: string;
+  companyId: string;
+  contractId: string;
+  contractNumber: string;
+  clientId: string;
+  clientName: string;
+  competence: string;
+  installment: number;
+  description: string;
+  expectedAmount: number;
+  billingDate: string;
+  dueDate: string;
+  status: RecurringBillingStatus;
+  missingFields: string[];
+  environment: 'producao' | 'producao_restrita';
+  takerSnapshot: Record<string, unknown>;
+  fiscalSnapshot: Record<string, unknown>;
+  generateBoleto: boolean;
+  dpsNumber?: string;
+  nfseNumber?: string;
+  officialAccessKey?: string;
+  authorizedAt?: string;
+  sefinError?: { code?: string; message: string };
+  authorizedXml?: string;
+  danfseReference?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
 }
 
 export interface NotaFiscalProduto {
@@ -1323,14 +1371,46 @@ export interface NotaFiscalServico {
   };
   dataCompetencia: string;
   observacoes?: string;
-  status: 'Rascunho' | 'Emitida' | 'Cancelada' | 'Rejeitada' | 'Autorizada';
-  numeroNota: string;
+  status: 'RASCUNHO' | 'VALIDANDO' | 'PROCESSANDO' | 'AUTORIZADA' | 'REJEITADA' | 'CANCELAMENTO SOLICITADO' | 'CANCELADA' | 'ERRO' | 'Rascunho' | 'Emitida' | 'Cancelada' | 'Rejeitada' | 'Autorizada';
+  numeroNota?: string;
+  numeroDps?: string;
+  serieDps?: string;
   codigoVerificacao?: string;
+  chaveAcessoOficial?: string;
+  xmlAutorizado?: string;
   xmlOriginal?: string;
   pdfUrl?: string;
   contratoId?: string;
   dataEmissao: string;
   boletoCriadoId?: string;
+  reference?: string;
+  provider?: 'sefin_nacional';
+  providerStatus?: string;
+  protocol?: string;
+  xmlPath?: string;
+  pdfPath?: string;
+  chaveAcesso?: string;
+  nfseId?: string;
+  dfseNumber?: string;
+  authorizationHttpStatus?: number;
+  xmlAvailable?: boolean;
+  danfseAvailable?: boolean;
+  responsePath?: string;
+  environment?: 'producao_restrita' | 'producao';
+  companyId?: string;
+  contractId?: string;
+  competence?: string;
+  serviceKind?: string;
+  cancellationStatus?: 'not_requested' | 'validated_not_transmitted' | 'transmitting' | 'unknown' | 'registered' | 'rejected';
+  cancellationEventId?: string;
+  cancellationProtocol?: string;
+  cancellationReasonCode?: '1' | '2' | '9';
+  cancellationReason?: string;
+  cancellationRequestedAt?: string;
+  cancelledAt?: string;
+  cancellationResponsePath?: string;
+  discount?: number;
+  totalAmount?: number;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -1381,8 +1461,21 @@ export interface ConfiguracaoFiscal {
   id: string;
   cnpj: string;
   razaoSocial: string;
+  nomeFantasia?: string;
   inscricaoEstadual: string;
   inscricaoMunicipal?: string;
+  municipio?: string;
+  codigoIbge?: string;
+  optanteSimplesNacional?: boolean;
+  situacaoSimplesNacional?: '1' | '2' | '3';
+  situacaoSimplesNacionalCompetencia?: string;
+  situacaoSimplesNacionalFonte?: string;
+  codigoServicoMunicipal?: string;
+  itemListaServico?: string;
+  cnae?: string;
+  nbs?: string;
+  aliquotaIssPadrao?: number;
+  provedorFiscal?: 'sefin_nacional';
   regimeTributario: 'Simples Nacional' | 'Lucro Presumido' | 'Lucro Real';
   aliquotaSimplesPadrao?: number;
   certificadoDigitalNome?: string;
@@ -1395,7 +1488,7 @@ export interface FiscalAuditLog {
   id: string;
   userId: string;
   userName: string;
-  action: 'emissao_nfe' | 'emissao_nfse' | 'cancelamento_nfe' | 'cancelamento_nfse' | 'geracao_boleto' | 'baixa_boleto' | 'configuracao_alterada' | 'integracao_alterada';
+  action: 'emissao_nfe' | 'emissao_nfse' | 'consulta_nfse' | 'download_xml_nfse' | 'download_danfse_nfse' | 'impressao_nfse' | 'cancelamento_nfe' | 'cancelamento_nfse' | 'geracao_boleto' | 'baixa_boleto' | 'configuracao_alterada' | 'integracao_alterada';
   details: string;
   tipoDocumento?: 'nfe' | 'nfse' | 'boleto' | 'conta' | 'config';
   documentNumero?: string;

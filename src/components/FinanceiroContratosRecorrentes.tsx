@@ -6,7 +6,11 @@ import {
   Building2, Percent, Users, AlertTriangle, FileCheck, X
 } from 'lucide-react';
 import { databaseService } from '../services/databaseService';
-import { Cliente, ContratoRecorrente, Unidade, Usuario, NotaFiscalServico, BoletoBancario, ContratoItem } from '../types';
+import { Cliente, ConfiguracaoFiscal, ContratoRecorrente, Unidade, Usuario, NotaFiscalServico, BoletoBancario, ContratoItem, FaturamentoRecorrente } from '../types';
+import { listRecurringBillings } from '../services/recurringBillingService';
+import RecurringBillingQueue from './fiscal/RecurringBillingQueue';
+import { fiscalA1SessionRef } from '../services/nfseIssuanceService';
+import { fiscalApi } from '../services/fiscalApi';
 import { toast } from 'react-hot-toast';
 import { db } from '../firebase';
 import { collection, getDocs, addDoc } from '../services/resilientFirestoreClient';
@@ -24,6 +28,9 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
   const [unidades, setUnidades] = useState<Unidade[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [billingHistory, setBillingHistory] = useState<FaturamentoRecorrente[]>([]);
+  const [fiscalConfig, setFiscalConfig] = useState<ConfiguracaoFiscal | null>(null);
+  const [fiscalEnvironment, setFiscalEnvironment] = useState<'producao' | 'producao_restrita'>('producao');
 
   // Filters state
   const [searchTerm, setSearchTerm] = useState('');
@@ -52,7 +59,9 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
     tipoContrato: 'Suporte técnico' as 'Suporte técnico' | 'Manutenção preventiva' | 'Locação de equipamentos' | 'Software' | 'Sistema de ponto' | 'Controle de acesso' | 'Outros',
     reajusteAnual: false,
     indiceReajuste: 'IGPM' as string,
-    itens: [] as ContratoItem[]
+    itens: [] as ContratoItem[],
+    emitirNfseRecorrente: false,
+    fiscal: { descricaoServico: 'SERVIÇOS RECORRENTES DE ASSISTÊNCIA TÉCNICA E SUPORTE DE TI.', codigoServicoMunicipal: '', itemLc116: '', cnae: '', nbs: '', aliquotaIss: 0, issRetido: false, municipioPrestacao: '', naturezaOperacao: '', declaracaoAdicional: '', valorNfse: 0, gerarBoleto: false }
   });
 
   // Toggle to synchronize contract monthly total with the sum of its items
@@ -105,6 +114,10 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
       const snap = await getDocs(collection(db, 'contratos'));
       const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as ContratoRecorrente));
       setContratos(list);
+      setBillingHistory(await listRecurringBillings(user.companyId || 'default'));
+      setFiscalConfig(await databaseService.getConfiguracaoFiscal());
+      const environment = await fiscalApi.getEnvironment();
+      setFiscalEnvironment(environment.environment === 'producao' ? 'producao' : 'producao_restrita');
     } catch (err: any) {
       console.error('Error fetching contracts data:', err);
       toast.error('Erro ao carregar dados dos contratos recorrentes.');
@@ -184,12 +197,12 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
     const invoiceableConts = contratos.filter(c => c.status === 'Ativo' || c.status === 'Vencendo');
 
     invoiceableConts.forEach(c => {
-      const alreadyBilled = c.faturamentosGerados?.includes(currentPeriod);
-      if (alreadyBilled) {
-        billedThisMonthValue += c.valorMensal;
+      const billing = billingHistory.find(item => item.contractId === c.id && item.competence === currentPeriod);
+      if (billing?.status === 'AUTORIZADA') {
+        billedThisMonthValue += billing.expectedAmount;
         billedThisMonthCount += 1;
       } else {
-        pendingThisMonthValue += c.valorMensal;
+        pendingThisMonthValue += billing?.expectedAmount || c.fiscal?.valorNfse || c.valorMensal;
         pendingThisMonthCount += 1;
       }
     });
@@ -227,7 +240,7 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
       pendingValue: pendingThisMonthValue,
       pendingCount: pendingThisMonthCount
     };
-  }, [contratos, currentPeriod]);
+  }, [contratos, billingHistory, currentPeriod]);
 
   // Filters logic with Client portal restriction
   const filteredContracts = useMemo(() => {
@@ -280,7 +293,9 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
       tipoContrato: 'Suporte técnico',
       reajusteAnual: false,
       indiceReajuste: 'IGPM',
-      itens: []
+      itens: [],
+      emitirNfseRecorrente: false,
+      fiscal: { descricaoServico: 'SERVIÇOS RECORRENTES DE ASSISTÊNCIA TÉCNICA E SUPORTE DE TI.', codigoServicoMunicipal: '', itemLc116: '', cnae: '', nbs: '', aliquotaIss: 0, issRetido: false, municipioPrestacao: '', naturezaOperacao: '', declaracaoAdicional: '', valorNfse: 0, gerarBoleto: false }
     });
     setSyncValueWithItens(true);
     setIsDrawerOpen(true);
@@ -307,7 +322,9 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
       tipoContrato: contract.tipoContrato || 'Suporte técnico',
       reajusteAnual: contract.reajusteAnual || false,
       indiceReajuste: contract.indiceReajuste || 'IGPM',
-      itens: contract.itens || []
+      itens: contract.itens || [],
+      emitirNfseRecorrente: contract.emitirNfseRecorrente === true,
+      fiscal: { descricaoServico: contract.fiscal?.descricaoServico || contract.descricaoServico, codigoServicoMunicipal: contract.fiscal?.codigoServicoMunicipal || '', itemLc116: contract.fiscal?.itemLc116 || '', cnae: contract.fiscal?.cnae || '', nbs: contract.fiscal?.nbs || '', aliquotaIss: contract.fiscal?.aliquotaIss || 0, issRetido: contract.fiscal?.issRetido === true, municipioPrestacao: contract.fiscal?.municipioPrestacao || '', naturezaOperacao: contract.fiscal?.naturezaOperacao || '', declaracaoAdicional: contract.fiscal?.declaracaoAdicional || '', valorNfse: contract.fiscal?.valorNfse || contract.valorMensal, gerarBoleto: contract.fiscal?.gerarBoleto === true }
     });
     setSyncValueWithItens(false); // Let edits preserve actual set value
     setIsDrawerOpen(true);
@@ -434,158 +451,6 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
       console.error(err);
       toast.error('Erro ao excluir contrato.');
     }
-  };
-
-  // Batch Billing Automation Execution (NFS-e & Boleto Generator)
-  const handleRunBilling = async (idsToBill: string[]) => {
-    if (!canManage) {
-      toast.error('Operação de faturamento não permitida para o seu usuário.');
-      return;
-    }
-    if (idsToBill.length === 0) {
-      toast.error('Selecione ao menos um contrato pendente.');
-      return;
-    }
-
-    setIsBillingProgress(true);
-    
-    // Read bank accounts to issue boletos
-    let bankAccounts: any[] = [];
-    try {
-      bankAccounts = await databaseService.getContasBancarias();
-    } catch (err) {
-      console.warn('Could not query real bank accounts', err);
-    }
-
-    const defaultBank = bankAccounts[0] || {
-      id: 'default-bank',
-      banco: 'Sicoob',
-      conta: '91823-1',
-      agencia: '3024',
-      jurosPadrao: 1.0,
-      multaPadrao: 2.0,
-      descontoPadrao: 0
-    };
-
-    let processedCount = 0;
-    let totalBilledVal = 0;
-
-    for (const contractId of idsToBill) {
-      const contract = contratos.find(c => c.id === contractId);
-      if (!contract) continue;
-
-      try {
-        // PROGRESS PROGRESSIVE NUMBERS
-        const nextNfseNumber = String(Math.floor(Math.random() * 900000) + 100000);
-        const nextBoletoNum = String(Math.floor(Math.random() * 900000) + 100000);
-
-        // 1. Calculations & Tax parameters simulation (Brazilian Simples Nacional standard)
-        const totalVal = contract.valorMensal;
-        const issValue = parseFloat((totalVal * 0.02).toFixed(2)); // 2% ISS standard
-        
-        // 2. Assemble and Create NFS-e
-        const nfsePayload: Omit<NotaFiscalServico, 'id' | 'createdAt' | 'updatedAt'> = {
-          clienteId: contract.clienteId,
-          clienteNome: contract.clienteNome,
-          municipioPrestacao: 'Feira de Santana - BA',
-          codigoServico: '0101', // Technical consulting services
-          descricaoServico: `${contract.descricaoServico} - REFERENTE AO PERÍODO DE ${getMonthName(currentPeriod).toUpperCase()}. CONTRATO NÚMERO: ${contract.numeroContrato}`,
-          valorServico: totalVal,
-          iss: 2,
-          issRetido: false,
-          retencoes: {
-            pis: 0,
-            cofins: 0,
-            csll: 0,
-            irrf: 0,
-            totalRetido: 0
-          },
-          dataCompetencia: new Date().toISOString().split('T')[0],
-          observacoes: `Faturamento recorrente mensal automático do contrato comercial nº ${contract.numeroContrato}.`,
-          status: 'Autorizada',
-          numeroNota: nextNfseNumber,
-          codigoVerificacao: Math.random().toString(36).substring(2, 10).toUpperCase(),
-          dataEmissao: new Date().toISOString().split('T')[0],
-          xmlOriginal: `<?xml version="1.0" encoding="UTF-8"?><Nfse><InfNfse><Numero>${nextNfseNumber}</Numero><CodigoVerificacao>NFSE-${nextNfseNumber}</CodigoVerificacao><DataEmissao>${new Date().toISOString()}</DataEmissao><Valores><ValorServicos>${totalVal}</ValorServicos></Valores></InfNfse></Nfse>`,
-          pdfUrl: `https://mundotech.srv.br/nota-fiscal/pdf/${contract.id}`,
-          contratoId: contract.id
-        };
-
-        const nfseResult = await databaseService.createNotaFiscalServico(nfsePayload);
-
-        // 3. Assemble and Create Boleto
-        const boletoPayload: Omit<BoletoBancario, 'id' | 'createdAt' | 'updatedAt'> = {
-          clienteId: contract.clienteId,
-          clienteNome: contract.clienteNome,
-          bancoId: defaultBank.id,
-          bancoNome: defaultBank.banco,
-          nossoNumero: nextBoletoNum,
-          valorOriginal: totalVal,
-          valorCobrado: totalVal,
-          vencimento: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 10 days from now
-          dataDocumento: new Date().toISOString().split('T')[0],
-          documentoOrigemId: nfseResult.id,
-          documentoOrigemTipo: 'Servico',
-          juros: defaultBank.jurosPadrao || 1,
-          multa: defaultBank.multaPadrao || 2,
-          desconto: defaultBank.descontoPadrao || 0,
-          status: 'Pendente',
-          pdfSimuladoUrl: `https://mockup-bank.io/invoice/render/${nextBoletoNum}`
-        };
-
-        const boletoResult = await databaseService.createBoletoBancario(boletoPayload);
-
-        // Link Boleto back inside NFS-e
-        await databaseService.updateNotaFiscalServico(nfseResult.id, { boletoCriadoId: boletoResult.id });
-
-        // 3b. Create Accounts Receivable record in contasReceber collection
-        await addDoc(collection(db, 'contasReceber'), {
-          clienteId: contract.clienteId,
-          clienteNome: contract.clienteNome,
-          contratoId: contract.id,
-          contratoNumero: contract.numeroContrato,
-          valor: totalVal,
-          boletoCriadoId: boletoResult.id,
-          notaFiscalCriadaId: nfseResult.id,
-          pdfNotaUrl: nfsePayload.pdfUrl,
-          xmlNotaOriginal: nfsePayload.xmlOriginal,
-          numeroNota: nextNfseNumber,
-          nossoNumeroBoleto: nextBoletoNum,
-          dataGeracao: new Date().toISOString().split('T')[0],
-          dataVencimento: boletoPayload.vencimento,
-          status: 'Pendente',
-          faturamentoPeriodo: currentPeriod,
-          createdAt: new Date().toISOString(),
-          observacoes: `Contas a Receber gerado pelo faturamento do Contrato nº ${contract.numeroContrato} - Período: ${getMonthName(currentPeriod)}`
-        });
-
-        // 4. Update parent Contract recorrente's faturamentosGerados list
-        const updatedFaturamentosArray = [...(contract.faturamentosGerados || []), currentPeriod];
-        await databaseService.updateContratoRecorrente(contract.id, {
-          faturamentosGerados: updatedFaturamentosArray
-        });
-
-        // 5. Register Log
-        await databaseService.createFiscalAuditLog({
-          userId: user.id || 'system',
-          userName: user.nome || 'Sistema',
-          action: 'emissao_nfse',
-          details: `Faturamento recorrente do contrato nº ${contract.numeroContrato}. NFS-e nº ${nextNfseNumber} e Boleto nº ${nextBoletoNum} emitidos. Cliente: ${contract.clienteNome}. Valor: ${formatToBRL(totalVal)}`,
-          tipoDocumento: 'nfse',
-          documentNumero: nextNfseNumber
-        });
-
-        processedCount += 1;
-        totalBilledVal += totalVal;
-      } catch (err) {
-        console.error(`Error billing contract ${contract.id}:`, err);
-      }
-    }
-
-    toast.success(`Sucesso! ${processedCount} contratos faturados. Total: R$ ${totalBilledVal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`);
-    setSelectedContractIds([]);
-    setIsBillingProgress(false);
-    loadInitialData(); // Refresh lists and calculations
   };
 
   const toggleSelectContract = (cid: string) => {
@@ -1060,166 +925,7 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
       )}
 
       {/* TABS 2: FATURAR CONTRATOS (Specific Invoice Queue screen) */}
-      {subTab === 'faturar' && (
-        <div className="space-y-4">
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Faturamento Automatizado de Contratos</h3>
-                <p className="text-xs text-slate-400 font-medium mt-1">
-                  Selecione os contratos pendentes abaixo para emitir as NFS-e de prestação de serviços de forma simultânea e enviar os boletos bancários ao e-mail dos clientes.
-                </p>
-              </div>
-              <div className="bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-100 flex items-center gap-3">
-                <Calendar className="text-blue-600 shrink-0" size={16} />
-                <span className="text-xs font-bold text-slate-600 uppercase">
-                  Período Atual: <b className="text-blue-600 font-extrabold">{getMonthName(currentPeriod).toUpperCase()}</b>
-                </span>
-              </div>
-            </div>
-
-            {/* BATCH ACTION CONTROLS */}
-            <div className="mt-6 flex flex-col sm:flex-row justify-between items-stretch sm:items-center p-4 bg-blue-50/50 hover:bg-blue-50/70 border border-blue-100 rounded-2xl gap-4">
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={handleSelectAll}
-                  disabled={pendingInvoicingList.length === 0}
-                  className="p-1.5 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-slate-600 disabled:opacity-50 cursor-pointer"
-                  title={selectedContractIds.length === pendingInvoicingList.length ? 'Desmarcar Todos' : 'Selecionar Todos'}
-                >
-                  {selectedContractIds.length === pendingInvoicingList.length && pendingInvoicingList.length > 0 ? (
-                    <CheckSquare size={16} className="text-blue-600" />
-                  ) : (
-                    <Square size={16} />
-                  )}
-                </button>
-                <div>
-                  <span className="text-xs text-slate-600 font-semibold block uppercase">
-                    Selecionados: <b>{selectedContractIds.length}</b> de <b>{pendingInvoicingList.length}</b> pendentes
-                  </span>
-                  <span className="text-xs text-blue-800 font-extrabold uppercase mt-0.5 block">
-                    Valor total de envio: R$ {
-                      pendingInvoicingList
-                        .filter(c => selectedContractIds.includes(c.id))
-                        .reduce((acc, c) => acc + c.valorMensal, 0)
-                        .toLocaleString('pt-BR', { minimumFractionDigits: 2 })
-                    }
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => handleRunBilling(selectedContractIds)}
-                  disabled={selectedContractIds.length === 0 || isBillingProgress}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  {isBillingProgress ? (
-                    <RefreshCw size={14} className="animate-spin" />
-                  ) : (
-                    <FileCheck size={14} />
-                  )}
-                  Faturar Selecionados
-                </button>
-                <button
-                  onClick={() => {
-                    const allIds = pendingInvoicingList.map(c => c.id);
-                    handleRunBilling(allIds);
-                  }}
-                  disabled={pendingInvoicingList.length === 0 || isBillingProgress}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  Faturar Todos os {pendingInvoicingList.length}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50/70 text-[10px] uppercase font-bold text-slate-400 tracking-wider border-b border-slate-100">
-                    <th className="py-3 px-5 w-12 text-center">Selecionar</th>
-                    <th className="py-3 px-5">Contrato / Cliente</th>
-                    <th className="py-3 px-5">Serviço de Faturamento</th>
-                    <th className="py-3 px-5">Valor Contract</th>
-                    <th className="py-3 px-5">Cronograma</th>
-                    <th className="py-3 px-5">Status Mês</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-xs">
-                  {pendingInvoicingList.map(c => {
-                    const isSelected = selectedContractIds.includes(c.id);
-                    const today = new Date();
-                    const billingCompletedDay = today.getDate() >= c.diaFaturamento;
-
-                    return (
-                      <tr 
-                        key={c.id} 
-                        onClick={() => toggleSelectContract(c.id)}
-                        className={`hover:bg-slate-50/50 cursor-pointer transition-colors ${
-                          isSelected ? 'bg-blue-50/20' : ''
-                        }`}
-                      >
-                        <td className="py-3.5 px-5 text-center">
-                          <button 
-                            type="button"
-                            className="p-1 hover:bg-slate-100 rounded text-slate-500 cursor-pointer"
-                          >
-                            {isSelected ? (
-                              <CheckSquare size={16} className="text-blue-600" />
-                            ) : (
-                              <Square size={16} />
-                            )}
-                          </button>
-                        </td>
-                        <td className="py-3.5 px-5">
-                          <div className="font-bold text-slate-800">{c.numeroContrato}</div>
-                          <div className="text-[10px] text-slate-500 mt-0.5">{c.clienteNome}</div>
-                        </td>
-                        <td className="py-3.5 px-5 max-w-xs truncate font-medium text-slate-600">
-                          {c.descricaoServico}
-                        </td>
-                        <td className="py-3.5 px-5 font-bold text-slate-900">
-                          R$ {c.valorMensal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                        </td>
-                        <td className="py-3.5 px-5">
-                          <div className={`text-[11px] font-semibold ${billingCompletedDay ? 'text-emerald-700' : 'text-slate-500'}`}>
-                            Fatura dia {String(c.diaFaturamento).padStart(2, '0')}
-                          </div>
-                          <div className="text-[9px] text-slate-400 mt-0.5">
-                            Vencimento dia {String(c.diaVencimento).padStart(2, '0')}
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-5">
-                          <span className={`inline-flex items-center gap-1 text-[9px] font-bold border px-2 py-0.5 rounded-full ${
-                            billingCompletedDay 
-                              ? 'bg-amber-50 text-amber-700 border-amber-200' 
-                              : 'bg-slate-50 text-slate-500 border-slate-100'
-                          }`}>
-                            <span className={`h-1.5 w-1.5 rounded-full ${billingCompletedDay ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'}`} />
-                            {billingCompletedDay ? 'Pronto para Fatura' : 'Aguardando Período'}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-
-                  {pendingInvoicingList.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="py-12 text-center text-slate-400 font-bold">
-                        Não existem contratos com cobrança pendente para o mês de {getMonthName(currentPeriod)}. Todos faturados com satisfação!
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
+      {subTab === 'faturar' && fiscalConfig && <RecurringBillingQueue user={user} contracts={contratos} clients={clientes} config={fiscalConfig} credentialsRef={fiscalA1SessionRef} environment={fiscalEnvironment} onCompleted={() => void loadInitialData()} />}
       {/* DRAWER FOR CREATING/EDITING CONTRACTS */}
       {isDrawerOpen && (
         <div className="fixed inset-0 z-[110] flex justify-end">
@@ -1484,6 +1190,22 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
               </div>
 
               {/* EQUIPAMENTOS E SOFTWARES VINCULADOS AO CONTRATO */}
+              <div className="border-t border-blue-200 pt-4 space-y-3">
+                <h4 className="text-[11px] font-extrabold uppercase tracking-widest text-blue-700">Configuração de Faturamento / NFS-e</h4>
+                <label className="flex items-center gap-2 text-xs font-bold"><input type="checkbox" checked={form.emitirNfseRecorrente} onChange={e => setForm(prev => ({...prev, emitirNfseRecorrente:e.target.checked}))}/> Emitir NFS-e recorrente</label>
+                {form.emitirNfseRecorrente && <div className="space-y-3 bg-blue-50/40 border border-blue-100 rounded-xl p-3">
+                  <label className="block text-[10px] font-bold uppercase">Descrição fiscal<textarea value={form.fiscal.descricaoServico} onChange={e => setForm(prev => ({...prev,fiscal:{...prev.fiscal,descricaoServico:e.target.value}}))} className="mt-1 w-full p-2 border rounded-lg bg-white"/></label>
+                  <div className="grid grid-cols-2 gap-2"><label className="text-[10px] font-bold uppercase">Código municipal<input value={form.fiscal.codigoServicoMunicipal} onChange={e=>setForm(prev=>({...prev,fiscal:{...prev.fiscal,codigoServicoMunicipal:e.target.value}}))} className="mt-1 w-full p-2 border rounded-lg bg-white"/></label><label className="text-[10px] font-bold uppercase">Item LC 116<input value={form.fiscal.itemLc116} onChange={e=>setForm(prev=>({...prev,fiscal:{...prev.fiscal,itemLc116:e.target.value}}))} className="mt-1 w-full p-2 border rounded-lg bg-white"/></label></div>
+                  <div className="grid grid-cols-2 gap-2"><label className="text-[10px] font-bold uppercase">CNAE<input value={form.fiscal.cnae} onChange={e=>setForm(prev=>({...prev,fiscal:{...prev.fiscal,cnae:e.target.value}}))} className="mt-1 w-full p-2 border rounded-lg bg-white"/></label><label className="text-[10px] font-bold uppercase">NBS<input value={form.fiscal.nbs} onChange={e=>setForm(prev=>({...prev,fiscal:{...prev.fiscal,nbs:e.target.value}}))} className="mt-1 w-full p-2 border rounded-lg bg-white"/></label></div>
+                  <div className="grid grid-cols-2 gap-2"><label className="text-[10px] font-bold uppercase">Alíquota ISS (%)<input type="number" step="0.01" value={form.fiscal.aliquotaIss} onChange={e=>setForm(prev=>({...prev,fiscal:{...prev.fiscal,aliquotaIss:Number(e.target.value)}}))} className="mt-1 w-full p-2 border rounded-lg bg-white"/></label><label className="text-[10px] font-bold uppercase">Município prestação<input value={form.fiscal.municipioPrestacao} onChange={e=>setForm(prev=>({...prev,fiscal:{...prev.fiscal,municipioPrestacao:e.target.value}}))} className="mt-1 w-full p-2 border rounded-lg bg-white"/></label></div>
+                  <label className="text-[10px] font-bold uppercase block">Natureza/operação<input value={form.fiscal.naturezaOperacao} onChange={e=>setForm(prev=>({...prev,fiscal:{...prev.fiscal,naturezaOperacao:e.target.value}}))} className="mt-1 w-full p-2 border rounded-lg bg-white"/></label>
+                  <label className="text-[10px] font-bold uppercase block">Declaração adicional<textarea value={form.fiscal.declaracaoAdicional} onChange={e=>setForm(prev=>({...prev,fiscal:{...prev.fiscal,declaracaoAdicional:e.target.value}}))} className="mt-1 w-full p-2 border rounded-lg bg-white"/></label>
+                  <label className="text-[10px] font-bold uppercase block">Valor mensal da NFS-e<CurrencyInput value={form.fiscal.valorNfse} onChange={value=>setForm(prev=>({...prev,fiscal:{...prev.fiscal,valorNfse:value}}))} className="mt-1 w-full p-2 border rounded-lg bg-white"/></label>
+                  <div className="flex gap-5"><label className="text-xs font-bold"><input type="checkbox" checked={form.fiscal.issRetido} onChange={e=>setForm(prev=>({...prev,fiscal:{...prev.fiscal,issRetido:e.target.checked}}))}/> ISS retido</label><label className="text-xs font-bold"><input type="checkbox" checked={form.fiscal.gerarBoleto} onChange={e=>setForm(prev=>({...prev,fiscal:{...prev.fiscal,gerarBoleto:e.target.checked}}))}/> Gerar boleto</label></div>
+                </div>}
+              </div>
+
+              {/* EQUIPAMENTOS E SOFTWARES VINCULADOS AO CONTRATO */}
               <div className="border-t border-slate-200 pt-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <h4 className="text-[11px] font-extrabold uppercase tracking-widest text-slate-700 flex items-center gap-1.5">
@@ -1639,6 +1361,9 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
                   </p>
                 )}
               </div>
+
+              {/* Observacoes */}
+              {editingContract && <div className="border-t pt-4"><h4 className="text-[11px] font-extrabold uppercase tracking-widest text-slate-700 mb-2">Histórico de faturamento</h4><div className="space-y-1 max-h-36 overflow-y-auto">{billingHistory.filter(item=>item.contractId===editingContract.id).map(item=><div key={item.id} className="flex justify-between gap-2 p-2 rounded-lg bg-slate-50 text-[10px]"><span>{item.competence}</span><span>R$ {item.expectedAmount.toLocaleString('pt-BR',{minimumFractionDigits:2})}</span><b>{item.status.replaceAll('_',' ')}</b><span>{item.nfseNumber ? `NFS-e ${item.nfseNumber}` : ''}</span></div>)}{!billingHistory.some(item=>item.contractId===editingContract.id)&&<p className="text-[10px] text-slate-400">Nenhuma competência gerada.</p>}</div></div>}
 
               {/* Observacoes */}
               <div>

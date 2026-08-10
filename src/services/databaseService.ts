@@ -3734,20 +3734,14 @@ export const databaseService = {
       } else {
         const defaultConfig: ConfiguracaoFiscal = {
           id: 'geral',
-          cnpj: '45.182.903/0001-84',
-          razaoSocial: 'MUNDO TECH ASSISTENCIA TECNICA E SERVICOS LTDA',
-          inscricaoEstadual: '110.231.542.115',
-          inscricaoMunicipal: '3.421.902-1',
+          cnpj: '',
+          razaoSocial: '',
+          inscricaoEstadual: '',
+          inscricaoMunicipal: '',
           regimeTributario: 'Simples Nacional',
-          aliquotaSimplesPadrao: 6.0,
-          certificadoDigitalNome: 'MUNDO_TECH_CERT_2026.pfx',
-          certificadoVencimento: '2027-04-15',
+          aliquotaSimplesPadrao: 0,
           ambiente: 'Homologação'
         };
-        await setDoc(docRef, {
-          ...defaultConfig,
-          updatedAt: serverTimestamp()
-        });
         return defaultConfig;
       }
     } catch (error) {
@@ -3821,6 +3815,11 @@ export const databaseService = {
       handleFirestoreError(error, OperationType.CREATE, 'contratos');
       throw error;
     }
+  },
+
+  async getContratosRecorrentes(): Promise<any[]> {
+    const snap = await getDocs(collection(db, 'contratos'));
+    return snap.docs.map(mapDoc);
   },
 
   async updateContratoRecorrente(id: string, contrato: any): Promise<any> {

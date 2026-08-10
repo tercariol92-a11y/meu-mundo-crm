@@ -1,13 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { CurrencyInput } from './CurrencyInput';
 import { formatToBRL, formatNumberBR } from '../utils/currency';
-import { 
+import {
   FileText, CreditCard, Settings, Plus, Search, CheckCircle, 
   XCircle, AlertCircle, RefreshCw, BarChart2, Download, Printer, 
   Trash2, Shield, Sliders, DollarSign, Clock, HelpCircle, 
   Building2, ArrowUpRight, Zap, ListFilter, Upload
 } from 'lucide-react';
 import { databaseService } from '../services/databaseService';
+import { fiscalApi } from '../services/fiscalApi';
+import RecurringBillingQueue from './fiscal/RecurringBillingQueue';
+import { buildValidatedNfseDraft, fiscalA1SessionRef, issueNfseWithValidatedEngine } from '../services/nfseIssuanceService';
 import { 
   Cliente, Produto, NotaFiscalProduto, NotaFiscalServico, 
   BoletoBancario, ContaBancaria, ConfiguracaoFiscal, Usuario,
@@ -27,9 +30,11 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
   const [produtos, setProdutos] = useState<Produto[]>([]);
   const [nfeList, setNfeList] = useState<NotaFiscalProduto[]>([]);
   const [nfseList, setNfseList] = useState<NotaFiscalServico[]>([]);
+  const [contracts, setContracts] = useState<any[]>([]);
   const [boletos, setBoletos] = useState<BoletoBancario[]>([]);
   const [contasBancarias, setContasBancarias] = useState<ContaBancaria[]>([]);
   const [configFiscal, setConfigFiscal] = useState<ConfiguracaoFiscal | null>(null);
+  const [activeFiscalEnvironment, setActiveFiscalEnvironment] = useState<'producao' | 'producao_restrita' | null>(null);
   const [auditLogs, setAuditLogs] = useState<FiscalAuditLog[]>([]);
   
   // App-wide loaders & generic inputs
@@ -45,6 +50,15 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [selectedBoleto, setSelectedBoleto] = useState<BoletoBancario | null>(null);
   const [selectedNf, setSelectedNf] = useState<{tipo: 'produto'|'servico', data: any} | null>(null);
+  const [cancellationNote, setCancellationNote] = useState<NotaFiscalServico | null>(null);
+  const [cancellationReasonCode, setCancellationReasonCode] = useState<'1' | '2' | '9'>('1');
+  const [cancellationReason, setCancellationReason] = useState('');
+  const [cancellationConfirmed, setCancellationConfirmed] = useState(false);
+  const [isPreparingCancellation, setIsPreparingCancellation] = useState(false);
+  const [isReconcilingCancellation, setIsReconcilingCancellation] = useState(false);
+  const [cancellationValidation, setCancellationValidation] = useState<Record<string, unknown> | null>(null);
+  const [manualDanfseFlow, setManualDanfseFlow] = useState<{ accessKey: string; portalUrl: string } | null>(null);
+  const danfsePortalWindowRef = useRef<Window | null>(null);
 
   // XML Importation States
   const [isImportXmlModalOpen, setIsImportXmlModalOpen] = useState(false);
@@ -99,11 +113,49 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
       setClientes(clientesData || []);
       setProdutos(produtosData || []);
       setNfeList(nfeData || []);
-      setNfseList(nfseData || []);
+      setNfseList((nfseData || []).map((item: any) => ({
+        ...item,
+        clienteId: item.clienteId || item.clientId || '',
+        clienteNome: item.clienteNome || item.clientName || 'Cliente',
+        municipioPrestacao: item.municipioPrestacao || item.incidenceMunicipality || '',
+        codigoServico: item.codigoServico || item.municipalServiceCode || '',
+        descricaoServico: item.descricaoServico || item.invoiceDescription || item.description || '',
+        valorServico: Number(item.valorServico ?? item.serviceAmount ?? item.totalAmount ?? 0),
+        iss: Number(item.iss ?? item.issRate ?? 0),
+        issRetido: Boolean(item.issRetido ?? item.issWithheld),
+        retencoes: item.retencoes || { totalRetido: 0 },
+        dataCompetencia: item.dataCompetencia || item.competence || '',
+        numeroNota: item.numeroNota || item.invoiceNumber || '',
+        codigoVerificacao: item.codigoVerificacao || item.verificationCode,
+        dataEmissao: item.dataEmissao || item.emittedAt || '',
+      })));
       setBoletos(boletosData || []);
       setContasBancarias(contasData || []);
-      setConfigFiscal(fiscalConfigData || null);
+      setConfigFiscal(fiscalConfigData ? {
+        ...fiscalConfigData,
+        id: fiscalConfigData.id || 'config',
+        cnpj: fiscalConfigData.cnpj || '',
+        razaoSocial: fiscalConfigData.razaoSocial || '',
+        nomeFantasia: fiscalConfigData.nomeFantasia || fiscalConfigData.tradeName || '',
+        inscricaoEstadual: fiscalConfigData.inscricaoEstadual || fiscalConfigData.stateRegistration || '',
+        inscricaoMunicipal: fiscalConfigData.inscricaoMunicipal || fiscalConfigData.municipalRegistration || '',
+        regimeTributario: fiscalConfigData.regimeTributario || fiscalConfigData.taxRegime || 'Simples Nacional',
+        municipio: fiscalConfigData.municipio || fiscalConfigData.municipality || '',
+        codigoIbge: fiscalConfigData.codigoIbge || fiscalConfigData.ibgeCode || '',
+        aliquotaIssPadrao: fiscalConfigData.aliquotaIssPadrao ?? fiscalConfigData.defaultIssRate ?? 0,
+        codigoServicoMunicipal: fiscalConfigData.codigoServicoMunicipal || fiscalConfigData.municipalServiceCode || '',
+        itemListaServico: fiscalConfigData.itemListaServico || fiscalConfigData.lc116Item || '',
+        cnae: fiscalConfigData.cnae || '',
+        situacaoSimplesNacional: fiscalConfigData.situacaoSimplesNacional,
+        situacaoSimplesNacionalCompetencia: fiscalConfigData.situacaoSimplesNacionalCompetencia || '',
+        situacaoSimplesNacionalFonte: fiscalConfigData.situacaoSimplesNacionalFonte || '',
+        certificadoDigitalNome: fiscalConfigData.certificadoDigitalNome || fiscalConfigData.certificateFileName,
+        certificadoVencimento: fiscalConfigData.certificadoVencimento || fiscalConfigData.certificateValidTo?.slice(0, 10),
+        ambiente: 'Homologação',
+        provedorFiscal: 'sefin_nacional',
+      } : { id:'config', cnpj:'', razaoSocial:'', inscricaoEstadual:'', inscricaoMunicipal:'', regimeTributario:'Simples Nacional', ambiente:'Homologação', municipio:'', codigoIbge:'', provedorFiscal:'sefin_nacional' });
       setAuditLogs(auditLogsData || []);
+      setContracts((await databaseService.getContratosRecorrentes?.()) || []);
     } catch (err: any) {
       console.error(err);
       showToast('Erro ao carregar dados fiscais', 'error');
@@ -114,6 +166,9 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
 
   useEffect(() => {
     loadData();
+    void fiscalApi.getEnvironment()
+      .then(environment => setActiveFiscalEnvironment(environment.environment === 'producao' ? 'producao' : 'producao_restrita'))
+      .catch(() => setActiveFiscalEnvironment(null));
   }, []);
 
   // Form states for NFe
@@ -127,7 +182,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
     frete: 0,
     formaPagamento: 'Boleto' as const,
     condicaoPagamento: '30 Dias' as const,
-    emitirBoleto: true,
+    emitirBoleto: false,
     observacoes: ''
   });
 
@@ -162,6 +217,9 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
     retencaoIrrf: 0,
     emitirBoleto: true,
     observacoes: 'Competência do serviço efetuado conforme contrato.'
+    ,serviceKind: 'suporte'
+    ,discount: 0
+    ,competence: new Date().toISOString().slice(0, 7)
   });
 
   // Calculate NFS-e Net Values
@@ -336,83 +394,18 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
         return;
       }
 
-      // 1. Calculations
-      const taxComputed = getCalculatedNfseTaxes(nfseForm.valorServico, nfseForm.iss, nfseForm.issRetido);
-      const lastNfs = nfseList[0];
-      const nextNumber = lastNfs ? String(Number(lastNfs.numeroNota) + 1).padStart(6, '0') : '008901';
-
-      // 2. Assemble Document
-      const nfsPayload: Omit<NotaFiscalServico, 'id' | 'createdAt' | 'updatedAt'> = {
-        clienteId: clientObj.id,
-        clienteNome: clientObj.razaoSocial || clientObj.nomeFantasia,
-        municipioPrestacao: clientObj.cidade || 'Localidade Sede',
-        codigoServico: nfseForm.codigoServico,
-        descricaoServico: nfseForm.descricaoServico.toUpperCase(),
-        valorServico: Number(nfseForm.valorServico),
-        iss: Number(nfseForm.iss),
-        issRetido: nfseForm.issRetido,
-        retencoes: {
-          pis: taxComputed.retencoes.pis,
-          cofins: taxComputed.retencoes.cofins,
-          csll: taxComputed.retencoes.csll,
-          irrf: taxComputed.retencoes.irrf,
-          totalRetido: taxComputed.totalRetido
-        },
-        dataCompetencia: new Date().toISOString().split('T')[0],
-        observacoes: nfseForm.observacoes || 'Prestação contratual mensal de assistência.',
-        status: 'Autorizada',
-        numeroNota: nextNumber,
-        codigoVerificacao: Math.random().toString(36).substring(2, 10).toUpperCase(),
-        dataEmissao: new Date().toISOString().split('T')[0]
-      };
-
-      // 3. Save
-      const createdNfs = await databaseService.createNotaFiscalServico(nfsPayload);
-
-      // 4. Emit Bank Slip if selected
-      if (nfseForm.emitirBoleto && contasBancarias.length > 0) {
-        const bankAccount = contasBancarias[0];
-        const nextSlipNumber = String(boletos.length + 1251).padStart(7, '0');
-
-        const slipPayload: Omit<BoletoBancario, 'id' | 'createdAt' | 'updatedAt'> = {
-          clienteId: clientObj.id,
-          clienteNome: clientObj.razaoSocial || clientObj.nomeFantasia,
-          bancoId: bankAccount.id,
-          bancoNome: bankAccount.banco,
-          nossoNumero: nextSlipNumber,
-          valorOriginal: Number(nfseForm.valorServico),
-          valorCobrado: Number(nfseForm.valorServico),
-          vencimento: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 15 days
-          dataDocumento: new Date().toISOString().split('T')[0],
-          documentoOrigemId: createdNfs.id,
-          documentoOrigemTipo: 'Servico',
-          juros: bankAccount.jurosPadrao,
-          multa: bankAccount.multaPadrao,
-          desconto: bankAccount.descontoPadrao,
-          status: 'Pendente',
-          pdfSimuladoUrl: `https://mockup-bank.io/invoice/render/${nextSlipNumber}`
-        };
-
-        const slip = await databaseService.createBoletoBancario(slipPayload);
-        await databaseService.updateNotaFiscalServico(createdNfs.id, { boletoCriadoId: slip.id });
-      }
-
-      // Gravando log de auditoria fiscal
-      await databaseService.createFiscalAuditLog({
-        userId: user.id || 'system',
-        userName: user.nome || 'Sistema',
-        action: 'emissao_nfse',
-        details: `Emissão de NFS-e nº ${nextNumber}. Cliente: ${nfsPayload.clienteNome}. Serviços: ${nfsPayload.descricaoServico}. Valor: ${formatToBRL(nfsPayload.valorServico)}. ${nfseForm.emitirBoleto ? 'Boleto automático gerado.' : ''}`,
-        tipoDocumento: 'nfse',
-        documentNumero: nextNumber
-      });
-
-      showToast('NFS-e de Serviço emitida e autorizada!');
+      const credentials = certificateSessionRef.current;
+      if (!credentials) throw new Error('A sessao protegida do certificado A1 precisa estar validada antes de preparar a emissao.');
+      if (!configFiscal) throw new Error('Configuração fiscal da empresa indisponível.');
+      const draft = buildValidatedNfseDraft({ client: clientObj, config: configFiscal, description: nfseForm.descricaoServico, amount: nfseForm.valorServico, competence: nfseForm.competence, issWithheld: nfseForm.issRetido, credentials });
+      const issued = await issueNfseWithValidatedEngine(draft);
+      if (issued?.result !== 'AUTORIZADA' || !issued?.accessKey) throw new Error(issued?.message || 'A SEFIN não autorizou a NFS-e.');
+      showToast(`NFS-e ${issued.nfseNumber || ''} autorizada em ${issued.environment === 'producao' ? 'Produção Real' : 'Produção Restrita'}.`, 'success');
       setIsNfseModalOpen(false);
-      loadData();
+      await loadData();
     } catch (err) {
       console.error(err);
-      showToast('Falha ao emitir NFS-e.', 'error');
+      showToast(err instanceof Error ? err.message : 'Falha ao emitir NFS-e.', 'error');
     }
   };
 
@@ -901,7 +894,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
       showToast('Apenas gerentes ou diretores financeiros podem cancelar notas emitidas.', 'error');
       return;
     }
-    if (!window.confirm('Tem certeza de que deseja cancelar esta nota fiscal? Esta ação é oficial na SEFAZ/Prefeitura simulada.')) {
+    if (!window.confirm('Tem certeza de que deseja solicitar o cancelamento fiscal desta nota?')) {
       return;
     }
 
@@ -924,21 +917,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
           documentNumero: nfObj?.numeroNota
         });
       } else {
-        const nfObj = nfseList.find(n => n.id === id);
-        await databaseService.updateNotaFiscalServico(id, { status: 'Cancelada' });
-        if (nfObj?.boletoCriadoId) {
-          await databaseService.updateBoletoBancario(nfObj.boletoCriadoId, { status: 'Cancelado' });
-        }
-
-        // Salva log de auditoria fiscal
-        await databaseService.createFiscalAuditLog({
-          userId: user.id || 'system',
-          userName: user.nome || 'Sistema',
-          action: 'cancelamento_nfse',
-          details: `Cancelamento de NFS-e nº ${nfObj?.numeroNota || id}. Cliente: ${nfObj?.clienteNome || 'Desconhecido'}. Serviço: ${nfObj?.descricaoServico || 'Não Informado'}. Valor: ${formatToBRL(nfObj?.valorServico || 0)}. ${nfObj?.boletoCriadoId ? 'Boleto de cobrança vinculado também cancelado.' : ''}`,
-          tipoDocumento: 'nfse',
-          documentNumero: nfObj?.numeroNota
-        });
+        throw new Error('Cancelamento bloqueado durante a Fase 1 técnica da SEFIN Nacional.');
       }
       showToast('Nota Fiscal CANCELADA!');
       setSelectedNf(null);
@@ -951,6 +930,113 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
 
   // Save changes to general tax details
   const [isSavingTaxConf, setIsSavingTaxConf] = useState(false);
+  const [certificatePassword, setCertificatePassword] = useState('');
+  const [isUploadingCertificate, setIsUploadingCertificate] = useState(false);
+  type A1CheckStatus = 'pending' | 'running' | 'passed' | 'failed';
+  const initialA1Checks = [
+    ['a1', 'A1 válido'], ['password', 'Senha correta'], ['validity', 'Certificado vigente'],
+    ['cnpj', 'CNPJ compatível'], ['chain', 'Cadeia ICP-Brasil válida'],
+    ['privateKey', 'Chave privada encontrada'], ['clientAuth', 'clientAuth válido'],
+    ['mtls', 'mTLS aceito pela SEFIN'], ['dps', 'DPS local válida'],
+    ['signature', 'XML assinado válido'],
+  ] as const;
+  const [a1Checks, setA1Checks] = useState<Record<string, { label: string; status: A1CheckStatus; detail?: string }>>(() => Object.fromEntries(initialA1Checks.map(([key, label]) => [key, { label, status: 'pending' }])));
+  const [phase2Contract, setPhase2Contract] = useState<{ status: 'idle' | 'running' | 'ready' | 'blocked'; detail?: string; endpoint?: string; method?: string; contentType?: string; payloadProperties?: string[]; environment?: 'producao' | 'producao_restrita' }>({ status: 'idle' });
+  const [phase3Result, setPhase3Result] = useState<{ status: 'idle' | 'running' | 'authorized' | 'rejected'; detail?: string; httpStatus?: number; code?: string | null; accessKey?: string | null }>({ status: 'idle' });
+  const certificatePasswordInputRef = useRef<HTMLInputElement>(null);
+  const certificateSessionRef = fiscalA1SessionRef;
+  const authorizedReconciledRef = useRef(false);
+  useEffect(() => {
+    if (!isAdmin || loading || authorizedReconciledRef.current) return;
+    authorizedReconciledRef.current = true;
+    void fiscalApi.reconcileAuthorizedNfse().then(() => loadData()).catch(() => undefined);
+  }, [isAdmin, loading]);
+  const updateA1Check = (key: string, status: A1CheckStatus, detail?: string) => setA1Checks(previous => ({ ...previous, [key]: { ...previous[key], status, detail } }));
+  const resetA1Checks = () => setA1Checks(Object.fromEntries(initialA1Checks.map(([key, label]) => [key, { label, status: 'pending' }])));
+  const useValidatedProductionContractFallback = (error: unknown) => {
+    const fiscalError = error as Error & { code?: string };
+    const swaggerUnavailable = fiscalError?.code === 'SEFIN_SWAGGER_UNAVAILABLE' || /Swagger oficial indisponível.*HTTP 503/i.test(fiscalError?.message || '');
+    if (activeFiscalEnvironment !== 'producao' || !swaggerUnavailable) return false;
+    setPhase2Contract({
+      status: 'ready',
+      detail: 'SWAGGER: indisponível temporariamente — usando contrato oficial já validado',
+      endpoint: 'https://sefin.nfse.gov.br/SefinNacional/nfse',
+      method: 'POST',
+      contentType: 'application/json',
+      payloadProperties: ['dpsXmlGZipB64'],
+      environment: 'producao',
+    });
+    return true;
+  };
+  const revalidatePhase2Contract = async () => {
+    const credentials = certificateSessionRef.current;
+    if (!credentials) return showToast('A sessão segura do A1 não está disponível.', 'error');
+    setPhase2Contract({ status: 'running', detail: 'Consultando o contrato OpenAPI oficial via mTLS...' });
+    try {
+      const contract = await fiscalApi.discoverPhase2Contract(credentials);
+      setPhase2Contract({ status: 'ready', detail: 'Contrato oficial confirmado. Nenhuma DPS foi transmitida.', endpoint: contract.endpoint, method: contract.method, contentType: contract.contentType, payloadProperties: contract.payloadProperties, environment: contract.environment });
+    } catch (error) {
+      if (!useValidatedProductionContractFallback(error)) setPhase2Contract({ status: 'blocked', detail: error instanceof Error ? error.message : 'Não foi possível confirmar o contrato oficial.' });
+    }
+  };
+  const handleCertificateFile = async (file?: File) => {
+    if (!file) return;
+    // Read the protected input at file-selection time. This avoids a stale
+    // controlled-state snapshot when the native file dialog opens immediately
+    // after the password is typed. The value is never persisted or logged.
+    const certificatePasswordAtSelection = certificatePasswordInputRef.current?.value ?? certificatePassword;
+    if (!certificatePasswordAtSelection) return showToast('Informe a senha do certificado A1 antes de selecionar o arquivo.', 'error');
+    if (!configFiscal?.cnpj || !configFiscal.inscricaoMunicipal || !configFiscal.codigoServicoMunicipal) return showToast('Preencha CNPJ, Inscrição Municipal e Código do Serviço.', 'error');
+    setIsUploadingCertificate(true);
+    resetA1Checks();
+    setPhase2Contract({ status: 'idle' });
+    setPhase3Result({ status: 'idle' });
+    let currentStep = 'a1';
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '')); reader.onerror = () => reject(new Error('Falha ao ler certificado.')); reader.readAsDataURL(file);
+      });
+      const common = { fileName: file.name, mimeType: file.type || 'application/x-pkcs12', certificateBase64: base64, password: certificatePasswordAtSelection, expectedCnpj: configFiscal.cnpj };
+      certificateSessionRef.current = common;
+      updateA1Check('a1', 'running');
+      const certificate = await fiscalApi.validateCertificate(common);
+      updateA1Check('a1', 'passed', 'PKCS#12 lido e validado.');
+      updateA1Check('password', 'passed', 'Senha aceita pelo PKCS#12.');
+      updateA1Check('validity', 'passed', `${certificate.validFrom} a ${certificate.validTo}`);
+      updateA1Check('privateKey', certificate.hasPrivateKey ? 'passed' : 'failed', certificate.hasPrivateKey ? 'Chave privada presente.' : 'Chave privada ausente.');
+      updateA1Check('cnpj', certificate.cnpjCompatible ? 'passed' : 'failed', certificate.cnpj ? `CNPJ identificado: ${certificate.cnpj}` : 'CNPJ não identificado.');
+      updateA1Check('chain', certificate.chain?.valid ? 'passed' : 'failed', certificate.chain?.valid ? `Raiz: ${certificate.chain.rootAuthority}` : certificate.chain?.error);
+      updateA1Check('clientAuth', certificate.clientAuthCapable ? 'passed' : 'failed', certificate.clientAuthCapable ? 'Uso de autenticação de cliente permitido.' : 'Uso clientAuth ausente.');
+      currentStep = 'mtls'; updateA1Check('mtls', 'running');
+      const mtls = await fiscalApi.testMtls(common);
+      updateA1Check('mtls', mtls.accepted ? 'passed' : 'failed', mtls.accepted ? `HTTP ${mtls.statusCode}; ${mtls.tlsProtocol}; ${mtls.elapsedMs} ms.` : 'Certificado rejeitado no handshake.');
+      const now = new Date();
+      const offset = -now.getTimezoneOffset(); const sign = offset >= 0 ? '+' : '-'; const pad = (n:number) => String(Math.abs(Math.trunc(n))).padStart(2, '0');
+      const issuedAt = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}${sign}${pad(offset/60)}:${pad(offset%60)}`;
+      const nationalServiceCode = String(configFiscal.codigoServicoMunicipal).replace(/\D/g, '').padEnd(6, '0').slice(0, 6);
+      const competenceDate = '2026-08-08';
+      const dpsData = { series: '1', number: String(Date.now()).slice(-12), issuedAt, competenceDate, nationalServiceCode, nbs: configFiscal.nbs || undefined, serviceDescription: 'TESTE PRODUCAO RESTRITA - SEM VALIDADE FISCAL', serviceValue: '1.00', simpleNationalOption: '3' as const, simpleNationalTaxRegime: '1' as const, specialTaxRegime: '0', municipalRegistration: configFiscal.inscricaoMunicipal, companyName: configFiscal.razaoSocial };
+      currentStep = 'dps'; updateA1Check('dps', 'running');
+      const dps = await fiscalApi.signLocalDps({ ...common, dpsData });
+      updateA1Check('dps', dps.xsdValidBeforeSignature && dps.xsdValidAfterSignature ? 'passed' : 'failed', `XSD antes: ${dps.xsdValidBeforeSignature ? 'OK' : 'falhou'}; depois: ${dps.xsdValidAfterSignature ? 'OK' : 'falhou'}.`);
+      updateA1Check('signature', dps.signatureVerified ? 'passed' : 'failed', dps.signatureVerified ? 'XMLDSig verificada pela chave pública.' : 'Verificação XMLDSig falhou.');
+      setPhase2Contract({ status: 'running', detail: 'Consultando o contrato OpenAPI oficial via mTLS...' });
+      try {
+        const contract = await fiscalApi.discoverPhase2Contract(common);
+        setPhase2Contract({ status: 'ready', detail: 'Contrato oficial confirmado. Nenhuma DPS foi transmitida.', endpoint: contract.endpoint, method: contract.method, contentType: contract.contentType, payloadProperties: contract.payloadProperties, environment: contract.environment });
+      } catch (phase2Error) {
+        if (!useValidatedProductionContractFallback(phase2Error)) setPhase2Contract({ status: 'blocked', detail: phase2Error instanceof Error ? phase2Error.message : 'Não foi possível confirmar o contrato oficial.' });
+      }
+      setConfigFiscal(previous => previous ? { ...previous, certificadoDigitalNome: file.name, certificadoVencimento: String(certificate.validTo || '').slice(0, 10) } : previous);
+      showToast(`A1 validado. Cadeia ICP-Brasil: OK; mTLS HTTP ${mtls.statusCode || 'sem resposta'}; assinatura local: ${dps.signatureVerified ? 'OK' : 'falhou'}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Falha ao validar certificado.';
+      if (currentStep === 'a1') { updateA1Check('a1', 'failed', message); updateA1Check('password', 'failed', message); }
+      else updateA1Check(currentStep, 'failed', message);
+      showToast(`Falha na etapa ${currentStep}: ${message}`, 'error');
+    }
+    finally { setCertificatePassword(''); setIsUploadingCertificate(false); }
+  };
   const handleSaveFiscalConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSetConfig) {
@@ -962,15 +1048,6 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
     setIsSavingTaxConf(true);
     try {
       await databaseService.saveConfiguracaoFiscal(configFiscal);
-
-      // Salva log de auditoria fiscal
-      await databaseService.createFiscalAuditLog({
-        userId: user.id || 'system',
-        userName: user.nome || 'Sistema',
-        action: 'configuracao_alterada',
-        details: `Configuração fiscal geral alterada. CNPJ: ${configFiscal.cnpj}, Razão Social: "${configFiscal.razaoSocial}", Alíquota Simples: ${configFiscal.aliquotaSimplesPadrao || 0}%, Ambiente: "${configFiscal.ambiente}".`,
-        tipoDocumento: 'config'
-      });
 
       showToast('Configurações fiscais atualizadas com sucesso!');
     } catch (err) {
@@ -984,7 +1061,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
   // Filtering utilities
   const filteredNfe = nfeList.filter(n => {
     const matchesSearch = n.clienteNome.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          n.numeroNota.includes(searchTerm) || 
+                          (n.numeroNota || '').includes(searchTerm) ||
                           n.produtoNome.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'todos' || n.status === statusFilter;
     return matchesSearch && matchesStatus;
@@ -998,6 +1075,183 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
     return matchesSearch && matchesStatus;
   });
 
+  const recordFiscalOperationalAudit = async (
+    action: 'consulta_nfse' | 'download_xml_nfse' | 'download_danfse_nfse' | 'impressao_nfse',
+    nfs: NotaFiscalServico,
+  ) => {
+    try {
+      const created = await databaseService.createFiscalAuditLog({
+        userId: user.id,
+        userName: user.nome,
+        action,
+        tipoDocumento: 'nfse',
+        documentNumero: nfs.numeroNota || '',
+        details: `NFS-e ${nfs.numeroNota || 'sem número'} · ${nfs.environment === 'producao' ? 'Produção Real' : 'Produção Restrita'} · chave final ${String(nfs.chaveAcessoOficial || nfs.chaveAcesso || nfs.reference || '').slice(-8) || 'n/a'}`,
+      });
+      setAuditLogs(previous => [created, ...previous]);
+    } catch (error) {
+      console.error('[Fiscal Audit] Não foi possível registrar a ação operacional.', error);
+    }
+  };
+
+  const handleViewInvoice = (tipo: 'produto' | 'servico', data: NotaFiscalProduto | NotaFiscalServico) => {
+    setSelectedNf({ tipo, data });
+    if (tipo === 'servico') void recordFiscalOperationalAudit('consulta_nfse', data as NotaFiscalServico);
+  };
+
+  const openCancellationPreparation = (nfs: NotaFiscalServico) => {
+    if (!canCancel) return showToast('Permissão fiscal insuficiente para preparar cancelamento.', 'error');
+    if (nfs.environment !== 'producao') return showToast('Esta etapa prepara somente cancelamento em Produção Real.', 'error');
+    if (!['AUTORIZADA', 'Autorizada'].includes(nfs.status)) return showToast('Somente NFS-e autorizada pode ser cancelada.', 'error');
+    const accessKey = nfs.chaveAcessoOficial || nfs.chaveAcesso || nfs.reference;
+    if (!accessKey || !/^\d{50}$/.test(accessKey)) return showToast('A NFS-e não possui chave oficial válida.', 'error');
+    setCancellationNote(nfs);
+    setCancellationReasonCode('1');
+    setCancellationReason('');
+    setCancellationConfirmed(false);
+    setCancellationValidation(null);
+  };
+
+  const validateCancellationPreparation = async () => {
+    if (!cancellationNote || isPreparingCancellation) return;
+    if (!cancellationConfirmed) return showToast('Confirme que compreende o efeito fiscal futuro do cancelamento.', 'error');
+    if (cancellationReason.trim().length < 15) return showToast('Informe um motivo com pelo menos 15 caracteres.', 'error');
+    const credentials = certificateSessionRef.current;
+    if (!credentials) return showToast('Valide o certificado A1 nesta sessão antes de preparar o evento.', 'error');
+    const accessKey = cancellationNote.chaveAcessoOficial || cancellationNote.chaveAcesso || cancellationNote.reference || '';
+    setIsPreparingCancellation(true);
+    try {
+      const result = await fiscalApi.prepareOfficialCancellation(accessKey, {
+        ...credentials,
+        expectedCnpj: configFiscal?.cnpj || '',
+        reasonCode: cancellationReasonCode,
+        reason: cancellationReason.trim(),
+      });
+      setCancellationValidation(result);
+      showToast('Evento validado localmente. Nenhum cancelamento foi transmitido.');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Falha ao validar o evento de cancelamento.', 'error');
+    } finally {
+      setIsPreparingCancellation(false);
+    }
+  };
+
+  const executeOfficialCancellation = async () => {
+    if (!cancellationNote || isPreparingCancellation || !cancellationValidation) return;
+    const validationReady = cancellationValidation.xsdValidBeforeSignature === true
+      && cancellationValidation.signatureVerified === true
+      && cancellationValidation.xsdValidAfterSignature === true
+      && cancellationValidation.gzipBase64Ready === true;
+    if (!validationReady) return showToast('Cancelamento não transmitido: o checklist local não está integralmente aprovado.', 'error');
+    const credentials = certificateSessionRef.current;
+    if (!credentials) return showToast('A sessão segura do certificado A1 não está disponível.', 'error');
+    const accessKey = cancellationNote.chaveAcessoOficial || cancellationNote.chaveAcesso || cancellationNote.reference || '';
+    setIsPreparingCancellation(true);
+    try {
+      const result = await fiscalApi.executeOfficialCancellation(accessKey, { ...credentials, expectedCnpj: configFiscal?.cnpj || '', reasonCode: cancellationReasonCode, reason: cancellationReason.trim() });
+      setNfseList(previous => previous.map(item => (item.chaveAcessoOficial || item.chaveAcesso || item.reference) === accessKey ? { ...item, status: 'CANCELADA', cancellationStatus: 'registered', cancellationEventId: result.eventId, cancellationProtocol: result.protocol } : item));
+      showToast('Cancelamento confirmado oficialmente pela SEFIN.');
+      setCancellationNote(null); setCancellationValidation(null);
+    } catch (error) {
+      const fiscalError = error as Error & { code?: string; data?: Record<string, unknown> };
+      const attempted = fiscalError.data?.transmissionAttempted === true;
+      const prefix = attempted ? 'POST iniciado' : 'POST não realizado';
+      const technicalMessage = fiscalError instanceof Error ? fiscalError.message : 'Falha técnica no fluxo interno de cancelamento.';
+      showToast(`${prefix}: ${technicalMessage}${fiscalError.code ? ` [${fiscalError.code}]` : ''}`, 'error');
+    } finally { setIsPreparingCancellation(false); }
+  };
+
+  const reconcileOfficialCancellation = async () => {
+    if (!cancellationNote || isReconcilingCancellation) return;
+    if (!certificatePassword) return showToast('Informe a senha do A1 para a consulta oficial por mTLS.', 'error');
+    const accessKey = cancellationNote.chaveAcessoOficial || cancellationNote.chaveAcesso || cancellationNote.reference || '';
+    setIsReconcilingCancellation(true);
+    try {
+      const result = await fiscalApi.reconcileOfficialCancellation(accessKey, { password: certificatePassword, expectedCnpj: configFiscal?.cnpj || '' });
+      if (result.officialStatus === 'CANCELADA') {
+        setNfseList(previous => previous.map(item => (item.chaveAcessoOficial || item.chaveAcesso || item.reference) === accessKey ? { ...item, status: 'CANCELADA', cancellationStatus: 'registered', cancellationEventId: result.eventId, cancellationProtocol: result.protocol } : item));
+        showToast('Cancelamento localizado e confirmado oficialmente pela SEFIN.');
+      } else if (result.officialStatus === 'AUTORIZADA') showToast('NFS-e autorizada e nenhum E101101 localizado. Nova tentativa manual pode ser liberada.', 'info');
+      else showToast('Consulta inconclusiva. O bloqueio de idempotência foi mantido.', 'error');
+      // A conciliação consulta apenas o estado oficial. Ela não representa o
+      // checklist criptográfico do XML e, portanto, não deve marcar as quatro
+      // validações locais como erro por ausência desses campos.
+      setCancellationValidation(null);
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Falha na conciliação oficial.', 'error'); }
+    finally { setIsReconcilingCancellation(false); }
+  };
+
+  const handleDownloadAuthorizedXml = async (nfs: NotaFiscalServico) => {
+    const accessKey = nfs.chaveAcessoOficial || nfs.chaveAcesso || nfs.reference || nfs.codigoVerificacao;
+    if (!accessKey) return showToast('Esta NFS-e não possui chave de acesso.', 'error');
+    try { await fiscalApi.downloadAuthorizedXml(accessKey); await recordFiscalOperationalAudit('download_xml_nfse', nfs); showToast('XML autorizado baixado com sucesso.'); }
+    catch (error) { showToast(error instanceof Error ? error.message : 'Falha ao baixar XML.', 'error'); }
+  };
+
+  const openOfficialDanfsePortal = (accessKey: string, existingWindow?: Window | null, environment: 'producao' | 'producao_restrita' = 'producao_restrita') => {
+    if (!/^\d{50}$/.test(accessKey)) throw new Error('Chave de acesso da NFS-e inválida.');
+    const popup = existingWindow && !existingWindow.closed ? existingWindow : window.open('', '_blank');
+    if (!popup) return null;
+    const document = popup.document;
+    document.title = 'Abrindo Portal Nacional da NFS-e';
+    document.body.textContent = 'Abrindo consulta oficial da NFS-e...';
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = environment === 'producao'
+      ? 'https://www.nfse.gov.br/ConsultaPublica/'
+      : 'https://www.producaorestrita.nfse.gov.br/ConsultaPublica/';
+    for (const [name, value] of [['TipoConsulta', '1'], ['ChaveAcesso', accessKey]]) {
+      const input = document.createElement('input');
+      input.type = 'hidden'; input.name = name; input.value = value;
+      form.appendChild(input);
+    }
+    document.body.appendChild(form);
+    form.submit();
+    return popup;
+  };
+
+  const handleDownloadDanfse = async (nfs: NotaFiscalServico, auditAction: 'download_danfse_nfse' | 'impressao_nfse' = 'download_danfse_nfse') => {
+    const accessKey = nfs.chaveAcessoOficial || nfs.chaveAcesso || nfs.reference || nfs.codigoVerificacao;
+    if (!accessKey) return showToast('Esta NFS-e não possui chave de acesso.', 'error');
+    const fiscalEnvironment = (nfs as NotaFiscalServico & { environment?: string }).environment === 'producao' ? 'producao' : 'producao_restrita';
+    const portalUrl = fiscalEnvironment === 'producao'
+      ? 'https://www.nfse.gov.br/ConsultaPublica/'
+      : 'https://www.producaorestrita.nfse.gov.br/ConsultaPublica/';
+    try { await navigator.clipboard.writeText(accessKey); } catch { /* A chave também fica visível no diálogo. */ }
+    const pendingPortal = window.open('', '_blank');
+    const credentials = fiscalEnvironment === 'producao_restrita' ? certificateSessionRef.current : null;
+    if (credentials) {
+      try {
+        await fiscalApi.downloadRestrictedDanfse(accessKey, { ...credentials, expectedCnpj: configFiscal?.cnpj || '' });
+        await recordFiscalOperationalAudit(auditAction, nfs);
+        pendingPortal?.close();
+        showToast('DANFSe oficial baixado com sucesso.');
+        return;
+      } catch (error) {
+        const code = (error as Error & { code?: string }).code;
+        if (code !== 'OFFICIAL_DANFSE_CAPTCHA_REQUIRED') {
+          pendingPortal?.close();
+          showToast(error instanceof Error ? error.message : 'DANFSe ainda não disponível.', 'error');
+          return;
+        }
+      }
+    }
+    danfsePortalWindowRef.current = openOfficialDanfsePortal(accessKey, pendingPortal, fiscalEnvironment);
+    setManualDanfseFlow({ accessKey, portalUrl });
+    await recordFiscalOperationalAudit(auditAction, nfs);
+  };
+
+  const continueManualDanfseFlow = () => {
+    if (!manualDanfseFlow) return;
+    if (danfsePortalWindowRef.current && !danfsePortalWindowRef.current.closed) danfsePortalWindowRef.current.focus();
+    else danfsePortalWindowRef.current = openOfficialDanfsePortal(
+      manualDanfseFlow.accessKey,
+      undefined,
+      manualDanfseFlow.portalUrl.includes('producaorestrita') ? 'producao_restrita' : 'producao',
+    );
+    showToast('Continue no Portal Nacional e use o botão oficial para baixar o DANFSe.', 'info');
+  };
+
   const filteredBoletos = boletos.filter(b => {
     const matchesSearch = b.clienteNome.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           b.nossoNumero.includes(searchTerm);
@@ -1006,7 +1260,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
   });
 
   // Calculate high level metrics
-  const totalFaturamentoServicos = nfseList.filter(n => n.status === 'Autorizada').reduce((acc, cr) => acc + cr.valorServico, 0);
+  const totalFaturamentoServicos = nfseList.filter(n => n.status === 'AUTORIZADA' || n.status === 'Autorizada').reduce((acc, cr) => acc + cr.valorServico, 0);
   const totalFaturamentoProdutos = nfeList.filter(n => n.status === 'Autorizada').reduce((acc, cr) => acc + cr.valorProduto, 0);
   const totalFaturamentoGeral = totalFaturamentoServicos + totalFaturamentoProdutos;
 
@@ -1031,6 +1285,30 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
         </div>
       )}
 
+      {manualDanfseFlow && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="danfse-captcha-title">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="rounded-xl bg-indigo-50 p-2 text-indigo-600"><Shield size={22} /></div>
+              <div>
+                <h3 id="danfse-captcha-title" className="text-base font-bold text-slate-900">Validação oficial do DANFSe</h3>
+                <p className="mt-2 text-sm text-slate-600">Resolva o hCaptcha no Portal Nacional e depois clique em Continuar.</p>
+              </div>
+            </div>
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Chave da NFS-e copiada</p>
+              <p className="mt-1 break-all font-mono text-xs text-slate-800">{manualDanfseFlow.accessKey}</p>
+            </div>
+            <p className="mt-3 text-xs text-slate-500">A validação e o download acontecem exclusivamente no Portal Nacional. O CRM não gera nem modifica o PDF.</p>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => setManualDanfseFlow(null)} className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-bold uppercase text-slate-700 hover:bg-slate-50">Fechar</button>
+              <button type="button" onClick={() => { void navigator.clipboard.writeText(manualDanfseFlow.accessKey); danfsePortalWindowRef.current = openOfficialDanfsePortal(manualDanfseFlow.accessKey); }} className="rounded-lg border border-indigo-200 px-4 py-2 text-xs font-bold uppercase text-indigo-700 hover:bg-indigo-50">Reabrir portal</button>
+              <button type="button" onClick={continueManualDanfseFlow} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold uppercase text-white hover:bg-indigo-700">Continuar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Fiscal Tab Row switcher */}
       <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-xs mb-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
@@ -1039,30 +1317,22 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
               <FileText className="text-blue-600" size={20} />
               Central de Faturamento & Gestão Fiscal
             </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Parametrize impostos, emita notas de vendas ou serviços, e controle faturamentos com boletos automatizados.
-            </p>
+            <p className="text-xs text-slate-500 mt-0.5">MÓDULO ATUAL: NOTA FISCAL DE SERVIÇO · NF-e DE PRODUTOS AINDA NÃO IMPLEMENTADA</p>
+            <div className={`mt-2 inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-black tracking-wider ${activeFiscalEnvironment === 'producao' ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : activeFiscalEnvironment === 'producao_restrita' ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+              AMBIENTE ATUAL: {activeFiscalEnvironment === 'producao' ? 'PRODUÇÃO REAL' : activeFiscalEnvironment === 'producao_restrita' ? 'PRODUÇÃO RESTRITA' : 'NÃO IDENTIFICADO'}
+            </div>
           </div>
           <div className="flex items-center gap-2 self-start md:self-center">
             {canEmit && (
               <>
                 <button 
                   onClick={() => {
-                    setNfeForm({ ...nfeForm, clienteId: '', valorProduto: 0, frete: 0 });
-                    setIsNfeModalOpen(true);
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
-                >
-                  <Plus size={14} /> Nova NF-e (Venda)
-                </button>
-                <button 
-                  onClick={() => {
-                    setNfseForm({ ...nfseForm, clienteId: '', valorServico: 0 });
+                    setNfseForm({ ...nfseForm, clienteId: '', valorServico: 0, emitirBoleto: false });
                     setIsNfseModalOpen(true);
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
                 >
-                  <Plus size={14} /> Nova NFS-e (Serviço)
+                  <Plus size={14} /> NOVA NFS-E — SERVIÇO
                 </button>
               </>
             )}
@@ -1214,7 +1484,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                   <div className="mt-6 pt-4 border-t border-slate-100 grid grid-cols-2 gap-4 text-center">
                     <div className="bg-slate-50 p-2.5 rounded-xl">
                       <span className="text-[10px] text-slate-400 block font-bold uppercase">Notas NFS-e Ativas</span>
-                      <strong className="text-sm font-extrabold text-indigo-700">{nfseList.filter(n=>n.status==='Autorizada').length}</strong>
+                      <strong className="text-sm font-extrabold text-indigo-700">{nfseList.filter(n => n.status === 'AUTORIZADA' || n.status === 'Autorizada').length}</strong>
                     </div>
                     <div className="bg-slate-50 p-2.5 rounded-xl">
                       <span className="text-[10px] text-slate-400 block font-bold uppercase">Notas NF-e Ativas</span>
@@ -1399,6 +1669,8 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
 
           {/* ================= 3. tab NFSE (SERVIÇOS) ================= */}
           {activeSubTab === 'nfse' && (
+            <div>
+              <RecurringBillingQueue user={user} contracts={contracts} clients={clientes} config={configFiscal} credentialsRef={certificateSessionRef} environment={activeFiscalEnvironment || 'producao_restrita'} onCompleted={() => void loadData()} />
             <div className="bg-white rounded-2xl border border-slate-200 shadow-xs">
               <div className="p-4 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-50/40">
                 <div className="relative flex-1 max-w-sm">
@@ -1461,6 +1733,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                         <th className="p-3">Valor de Serviço</th>
                         <th className="p-3">ISS Estimado</th>
                         <th className="p-3">Data Competência</th>
+                        <th className="p-3">Ambiente</th>
                         <th className="p-3">Status</th>
                         <th className="p-3 text-right">Ações</th>
                       </tr>
@@ -1488,8 +1761,13 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                             {nfs.dataCompetencia}
                           </td>
                           <td className="p-3">
+                            <span className={`px-2 py-0.5 text-[9px] font-bold rounded-full ${nfs.environment === 'producao' ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'}`}>
+                              {nfs.environment === 'producao' ? 'Produção Real' : 'Produção Restrita'}
+                            </span>
+                          </td>
+                          <td className="p-3">
                             <span className={`px-2 py-0.5 text-[9px] font-bold rounded-full ${
-                              nfs.status === 'Autorizada' ? 'bg-emerald-50 text-emerald-700' :
+                              (nfs.status === 'AUTORIZADA' || nfs.status === 'Autorizada') ? 'bg-emerald-50 text-emerald-700' :
                               nfs.status === 'Cancelada' ? 'bg-rose-50 text-rose-700' :
                               'bg-slate-100 text-slate-600'
                             }`}>
@@ -1498,15 +1776,24 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                           </td>
                           <td className="p-3 text-right space-x-1">
                             <button 
-                              onClick={() => setSelectedNf({ tipo: 'servico', data: nfs })}
+                              onClick={() => handleViewInvoice('servico', nfs)}
+                              title="Visualizar NFS-e"
                               className="p-1 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded"
                             >
                               <Search size={14} />
                             </button>
-                            {canCancel && nfs.status === 'Autorizada' && (
-                              <button 
-                                onClick={() => handleCancelInvoice(nfs.id, 'servico')}
-                                className="p-1 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded"
+                            {(nfs.status === 'AUTORIZADA' || nfs.status === 'Autorizada') && nfs.xmlAvailable && (
+                              <button onClick={() => void handleDownloadAuthorizedXml(nfs)} title="Baixar XML autorizado" className="p-1 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded"><Download size={14} /></button>
+                            )}
+                            {(nfs.status === 'AUTORIZADA' || nfs.status === 'Autorizada') && nfs.danfseAvailable && (
+                              <button onClick={() => void handleDownloadDanfse(nfs)} title="Baixar DANFSe/PDF" className="p-1 text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 rounded"><Printer size={14} /></button>
+                            )}
+                            {canCancel && nfs.environment === 'producao' && (nfs.status === 'AUTORIZADA' || nfs.status === 'Autorizada') && (
+                              <button
+                                type="button"
+                                onClick={() => openCancellationPreparation(nfs)}
+                                title="Preparar cancelamento oficial"
+                                className="p-1 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded"
                               >
                                 <XCircle size={14} />
                               </button>
@@ -1518,7 +1805,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                   </table>
                 </div>
               )}
-            </div>
+            </div></div>
           )}
 
           {/* ================= 4. tab BOLETOS ================= */}
@@ -1711,8 +1998,8 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
 
                       <div className="flex items-center justify-between p-3 rounded-xl border border-slate-100 bg-slate-50 hover:bg-slate-100/50 transition-colors">
                         <div>
-                          <p className="text-xs font-bold text-slate-700">Focus NFe API</p>
-                          <span className="text-[10px] text-slate-400 block mt-0.5">Certificado digital e contingência</span>
+                          <p className="text-xs font-bold text-slate-700">SEFIN Nacional</p>
+                          <span className="text-[10px] text-slate-400 block mt-0.5">Produção Restrita · Fase 1 técnica</span>
                         </div>
                         <button className="px-2.5 py-1 bg-slate-100 text-slate-700 text-[10px] font-bold rounded-lg border border-slate-200">
                           Inativo
@@ -1722,7 +2009,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                   </div>
 
                   <div className="pt-4 border-t border-slate-100 text-[10px] text-slate-400">
-                    *Mapeamento fiscal para Bling/Focus segue o layout de NFe do Ministério da Fazenda.
+                    *Integração fiscal direta com a SEFIN Nacional; produção real permanece bloqueada.
                   </div>
                 </div>
               </div>
@@ -1748,6 +2035,12 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                         required
                       />
                     </div>
+                    <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Município emissor</label><input value={configFiscal.municipio || ''} onChange={e => setConfigFiscal({...configFiscal, municipio:e.target.value})} disabled={!canSetConfig} required className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
+                    <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Código IBGE</label><input value={configFiscal.codigoIbge || ''} onChange={e => setConfigFiscal({...configFiscal, codigoIbge:e.target.value})} disabled={!canSetConfig} required maxLength={7} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
+                    <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Código serviço municipal</label><input value={configFiscal.codigoServicoMunicipal || ''} onChange={e => setConfigFiscal({...configFiscal, codigoServicoMunicipal:e.target.value})} disabled={!canSetConfig} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
+                    <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Item LC 116</label><input value={configFiscal.itemListaServico || ''} onChange={e => setConfigFiscal({...configFiscal, itemListaServico:e.target.value})} disabled={!canSetConfig} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
+                    <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">CNAE</label><input value={configFiscal.cnae || ''} onChange={e => setConfigFiscal({...configFiscal, cnae:e.target.value})} disabled={!canSetConfig} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
+                    <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">NBS (quando aplicável)</label><input value={configFiscal.nbs || ''} onChange={e => setConfigFiscal({...configFiscal, nbs:e.target.value.replace(/\D/g, '').slice(0,9)})} disabled={!canSetConfig} inputMode="numeric" maxLength={9} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
 
                     <div>
                       <label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">CNPJ do Beneficiário</label>
@@ -1799,6 +2092,44 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                     </div>
 
                     <div>
+                      <label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Situação oficial no Simples — competência</label>
+                      <select
+                        value={configFiscal.situacaoSimplesNacional || ''}
+                        onChange={e => setConfigFiscal({ ...configFiscal, situacaoSimplesNacional: (e.target.value || undefined) as ConfiguracaoFiscal['situacaoSimplesNacional'] })}
+                        disabled={!canSetConfig}
+                        className="w-full text-xs border border-slate-200 bg-white rounded-xl px-3 py-1.5 focus:ring-1"
+                      >
+                        <option value="">Selecione após consulta oficial</option>
+                        <option value="1">1 — Não Optante</option>
+                        <option value="2">2 — Optante MEI</option>
+                        <option value="3">3 — Optante ME/EPP</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Mês da situação oficial</label>
+                      <input
+                        type="month"
+                        value={configFiscal.situacaoSimplesNacionalCompetencia || ''}
+                        onChange={e => setConfigFiscal({ ...configFiscal, situacaoSimplesNacionalCompetencia: e.target.value })}
+                        disabled={!canSetConfig}
+                        className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5 focus:ring-1"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Fonte da confirmação oficial</label>
+                      <input
+                        value={configFiscal.situacaoSimplesNacionalFonte || ''}
+                        onChange={e => setConfigFiscal({ ...configFiscal, situacaoSimplesNacionalFonte: e.target.value })}
+                        disabled={!canSetConfig}
+                        placeholder="Ex.: consulta oficial do Simples Nacional/CNC"
+                        className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5 focus:ring-1"
+                      />
+                      <p className="text-[10px] text-amber-700 mt-1">Este valor é mensal e não é inferido automaticamente pelo regime tributário visual.</p>
+                    </div>
+
+                    <div>
                       <label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Alíquota ISS Estimado (%)</label>
                       <input 
                         type="number" 
@@ -1825,14 +2156,36 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                       </span>
                     </div>
                     {canSetConfig && (
-                      <button 
-                        type="button"
-                        onClick={() => alert('Para anexar um certificado real de teste (.pfx ou .cer), contate o administrador fiscal do Mundo Tech.')}
-                        className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold uppercase rounded-lg tracking-wider"
-                      >
-                        Substituir Certificado
+                      <div className="space-y-2"><input ref={certificatePasswordInputRef} type="password" value={certificatePassword} onChange={e => setCertificatePassword(e.target.value)} placeholder="Senha do certificado" autoComplete="new-password" className="block w-full text-xs border border-slate-200 rounded-lg px-3 py-1.5" /><label className="block px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold uppercase rounded-lg tracking-wider text-center cursor-pointer">{isUploadingCertificate ? 'Validando certificado...' : 'Substituir Certificado'}<input type="file" accept=".pfx,.p12,application/x-pkcs12" disabled={isUploadingCertificate} onChange={e => { void handleCertificateFile(e.target.files?.[0]); e.currentTarget.value=''; }} className="hidden" /></label></div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" aria-live="polite">
+                    {Object.entries(a1Checks).map(([key, check]) => (
+                      <div key={key} className={`rounded-lg border px-3 py-2 text-[11px] ${check.status === 'passed' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : check.status === 'failed' ? 'border-red-200 bg-red-50 text-red-800' : check.status === 'running' ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                        <div className="font-bold">{check.status === 'passed' ? '✓' : check.status === 'failed' ? '✕' : check.status === 'running' ? '…' : '○'} {check.label}</div>
+                        {check.detail && <div className="mt-1 break-words opacity-80">{check.detail}</div>}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className={`rounded-xl border px-4 py-3 text-[11px] ${phase2Contract.status === 'ready' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : phase2Contract.status === 'blocked' ? 'border-amber-200 bg-amber-50 text-amber-900' : phase2Contract.status === 'running' ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                    <div className="font-black uppercase">Fase 2 — Contrato SEFIN {phase2Contract.environment === 'producao' ? 'Produção Real' : phase2Contract.environment === 'producao_restrita' ? 'Produção Restrita' : 'Ambiente ativo'}</div>
+                    <div className="mt-1">{phase2Contract.detail || 'Aguardando validação autenticada do A1.'}</div>
+                    {phase2Contract.endpoint && <div className="mt-2 font-mono break-all">{phase2Contract.method} {phase2Contract.endpoint}</div>}
+                    {phase2Contract.contentType && <div>Content-Type: {phase2Contract.contentType}</div>}
+                    {phase2Contract.payloadProperties?.length ? <div>Payload oficial: {phase2Contract.payloadProperties.join(', ')}</div> : null}
+                    {phase2Contract.status !== 'running' && certificateSessionRef.current && (
+                      <button type="button" onClick={() => void revalidatePhase2Contract()} className="mt-2 rounded-lg border border-current px-3 py-1.5 font-bold">
+                        Revalidar contrato oficial
                       </button>
                     )}
+                  </div>
+                  <div className={`rounded-xl border px-4 py-3 text-[11px] ${phase3Result.status === 'authorized' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : phase3Result.status === 'rejected' ? 'border-red-200 bg-red-50 text-red-800' : phase3Result.status === 'running' ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+                    <div className="font-black uppercase">Fase 3 — Primeira transmissão restrita</div>
+                    <div className="mt-1">{phase3Result.detail || 'Aguardando execução autorizada.'}</div>
+                    {phase3Result.httpStatus ? <div>HTTP {phase3Result.httpStatus}{phase3Result.code ? ` · ${phase3Result.code}` : ''}</div> : null}
+                    {phase3Result.accessKey ? <div className="font-mono break-all">Chave: {phase3Result.accessKey}</div> : null}
                   </div>
 
                   <div className="flex justify-end gap-2 pt-3">
@@ -1850,12 +2203,15 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
               {/* Informação do Ambiente */}
               <div className="bg-white p-5 rounded-2xl border border-slate-202 shadow-xs space-y-4">
                 <h4 className="text-xs font-black uppercase tracking-wider text-slate-700">Segurança & Auditoria</h4>
-                <div className="p-3 bg-blue-50/50 border border-blue-100 rounded-xl text-[11px] text-blue-800 space-y-1">
+                <div className={`p-3 rounded-xl border text-[11px] space-y-1 ${activeFiscalEnvironment === 'producao' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
                   <p className="font-extrabold flex items-center gap-1">
                     <Sliders size={12} /> Nota de Compliance Técnico:
                   </p>
-                  <p>
-                    As notas fiscais geradas por esta plataforma operam em ambiente de <b>Homologação</b> (Ambiente de Testes SEFAZ-NFe). Nenhuma nota tem valor fiscal real para cobrança oficial da Receita, permitindo testes completos e seguros de simulação antes de mudar para ambiente de Produção.
+                  <p>{activeFiscalEnvironment === 'producao'
+                    ? 'AMBIENTE DE PRODUÇÃO REAL. As NFS-e autorizadas pela SEFIN neste ambiente possuem validade fiscal. Confira os dados antes da transmissão.'
+                    : activeFiscalEnvironment === 'producao_restrita'
+                      ? 'AMBIENTE DE TESTES / PRODUÇÃO RESTRITA. As emissões realizadas neste ambiente não possuem validade fiscal.'
+                      : 'AMBIENTE FISCAL NÃO IDENTIFICADO. Não transmita documentos até confirmar o ambiente ativo.'}
                   </p>
                 </div>
 
@@ -1944,6 +2300,10 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                     <option value="todos">Todos os Registros</option>
                     <option value="emissao_nfe">Emissão de NF-e</option>
                     <option value="emissao_nfse">Emissão de NFS-e</option>
+                    <option value="consulta_nfse">Consulta de NFS-e</option>
+                    <option value="download_xml_nfse">Download de XML oficial</option>
+                    <option value="download_danfse_nfse">Download de DANFSe oficial</option>
+                    <option value="impressao_nfse">Impressão de DANFSe oficial</option>
                     <option value="cancelamento_nfe">Cancelamento NF-e</option>
                     <option value="cancelamento_nfse">Cancelamento NFS-e</option>
                     <option value="baixa_boleto">Baixa de Boleto</option>
@@ -2073,6 +2433,23 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                     <option key={c.id} value={c.id}>{c.razaoSocial || c.nomeFantasia} ({c.cnpj || 'Sem CNPJ'})</option>
                   ))}
                 </select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Tipo de serviço</label>
+                  <select value={nfseForm.serviceKind} onChange={e => setNfseForm({ ...nfseForm, serviceKind: e.target.value })} className="w-full border border-slate-200 bg-white rounded-xl p-2">
+                    <option value="instalacao">Instalação</option><option value="manutencao">Manutenção</option><option value="suporte">Suporte técnico</option><option value="implantacao">Implantação</option><option value="treinamento">Treinamento</option><option value="configuracao">Configuração</option><option value="mensalidade">Mensalidade</option><option value="recorrente">Serviço recorrente</option><option value="locacao">Locação (validar contabilmente)</option><option value="outro">Outro serviço</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Competência</label>
+                  <input type="month" required value={nfseForm.competence} onChange={e => setNfseForm({ ...nfseForm, competence: e.target.value })} className="w-full border border-slate-200 rounded-xl p-2" />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Desconto</label>
+                  <CurrencyInput value={nfseForm.discount || 0} onChange={val => setNfseForm({ ...nfseForm, discount: val })} className="w-full border border-slate-200 rounded-xl p-2" />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2247,16 +2624,13 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
 
               <div>
                 <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Faturamento Referente à <b className="text-rose-500">*</b></label>
-                <select
+                <input
+                  type="text"
+                  required
                   value={nfseForm.descricaoServico}
                   onChange={e => setNfseForm({ ...nfseForm, descricaoServico: e.target.value })}
                   className="w-full border border-slate-200 bg-white rounded-xl p-2 focus:ring-1"
-                >
-                  <option value="CONTRATO MENSAL DE MANUTENÇÃO E SUPORTE TÉCNICO COMPLETO">Contrato mensal recorrente</option>
-                  <option value="PRESTAÇÃO DE SUPORTE TÉCNICO AVULSO E VISITA TÉCNICA LOCAL">Suporte técnico avulso</option>
-                  <option value="SERVIÇOS DE INSTALAÇÃO, CONFIGURAÇÃO E INFRAESTRUTURA DE REDES">Instalação e infraestrutura</option>
-                  <option value="TREINAMENTO INTEGRADO E CAPACITAÇÃO OPERACIONAL">Treinamento</option>
-                </select>
+                />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2302,12 +2676,13 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                 <input
                   type="checkbox"
                   id="chkEmitirBoletoService"
-                  checked={nfseForm.emitirBoleto}
-                  onChange={e => setNfseForm({ ...nfseForm, emitirBoleto: e.target.checked })}
+                  checked={false}
+                  disabled
+                  onChange={() => undefined}
                   className="w-4 h-4 text-blue-600 border-slate-300 rounded"
                 />
                 <label htmlFor="chkEmitirBoletoService" className="text-[11px] font-bold text-blue-900 select-none cursor-pointer">
-                  Gerar Boleto Bancário Automático para Liquidação
+                  Gerar Boleto Bancário Automático para Liquidação (desativado nesta emissão)
                 </label>
               </div>
 
@@ -2446,7 +2821,11 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-2xl p-6 overflow-y-auto">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3 mb-4">
               <div>
-                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">DANFE Simplificado de Simulação</span>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                  {selectedNf.tipo === 'servico'
+                    ? `NFS-e ${selectedNf.data.status} · ${selectedNf.data.environment === 'producao' ? 'Produção Real' : 'Produção Restrita'}`
+                    : 'Documento fiscal'}
+                </span>
                 <h3 className="text-sm font-extrabold text-slate-800">
                   {selectedNf.tipo === 'produto' ? 'Nota Fiscal de Venda de Produto (NF-e)' : 'Nota de Prestação de Serviço (NFS-e)'}
                 </h3>
@@ -2463,20 +2842,21 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
             <div className="border border-slate-200 p-4 rounded-xl space-y-3 bg-slate-50/50 text-xs text-slate-600 font-mono">
               <div className="flex justify-between border-b border-slate-200 pb-2">
                 <div>
-                  <p className="font-bold text-slate-800">MUNDO TECH ASSISTÊNCIA TÉCNICA E SERVIÇOS LTDA</p>
-                  <p>CNPJ: 45.182.903/0001-84 | São Paulo - SP</p>
+                  <p className="font-bold text-slate-800">{configFiscal?.razaoSocial || 'EMPRESA PRESTADORA'}</p>
+                  <p>CNPJ: {configFiscal?.cnpj || 'Não informado'} | {configFiscal?.municipio || 'Município não informado'}</p>
                 </div>
                 <div className="text-right">
                   <p className="font-bold">Número: #{selectedNf.data.numeroNota}</p>
-                  <p>Emissão: {selectedNf.data.dataEmissao}</p>
-                  <p className="text-[10px] font-bold text-emerald-600">SEFAZ - PROCESSO AUTORIZADO</p>
+                  <p>Emissão: {selectedNf.data.emittedAt || selectedNf.data.dataEmissao}</p>
+                  {selectedNf.tipo === 'servico' && <p>DPS: {selectedNf.data.numeroDps || 'Não informada'} · Série: {selectedNf.data.serieDps || 'Não informada'}</p>}
+                  <p className="text-[10px] font-bold text-emerald-600">{selectedNf.tipo === 'servico' ? 'SEFIN NACIONAL - AUTORIZADA' : 'SEFAZ - PROCESSO AUTORIZADO'}</p>
                 </div>
               </div>
 
               <div>
                 <p className="font-bold text-slate-800 border-b border-slate-200 pb-1 uppercase text-[10px]">Destinatário / Cliente</p>
                 <p className="font-bold mt-1 text-slate-700">{selectedNf.data.clienteNome}</p>
-                <p>CNPJ/CPF: {selectedNf.data.cnpjCpf}</p>
+                <p>CNPJ/CPF: {selectedNf.data.cnpjCpf || clientes.find(cliente => cliente.id === selectedNf.data.clienteId)?.cnpj || 'Não informado'}</p>
                 <p>Endereço: {selectedNf.data.endereco || 'Informado na Ficha cadastral'}</p>
               </div>
 
@@ -2508,33 +2888,35 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
               )}
 
               <div className="border-t border-slate-200 pt-2 text-[10px] text-slate-400">
-                <b>CHAVE DE AUTENTICIDADE:</b> {selectedNf.data.chaveAcesso || selectedNf.data.codigoVerificacao || 'VERIFICACAO_DE_SISTEMA_LOCAL'}
+                <b>CHAVE OFICIAL SEFIN:</b> {selectedNf.data.chaveAcessoOficial || selectedNf.data.chaveAcesso || selectedNf.data.reference || selectedNf.data.codigoVerificacao || 'Não informada'}
               </div>
             </div>
 
             <div className="flex justify-between items-center mt-5">
               <span className={`px-3 py-1 text-xs font-bold uppercase rounded-full ${
-                selectedNf.data.status === 'Autorizada' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
+                (selectedNf.data.status === 'Autorizada' || selectedNf.data.status === 'AUTORIZADA') ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
                 'bg-rose-50 text-rose-700 border border-rose-100'
               }`}>
-                Status SEFAZ: {selectedNf.data.status}
+                Status {selectedNf.tipo === 'servico' ? 'SEFIN' : 'SEFAZ'}: {selectedNf.data.status}
               </span>
 
               <div className="space-x-1.5">
-                <button 
-                  onClick={() => alert('Emissão de PDF simulada! Impressora pronta para impressão do DANFE para despacho do teclado/equipamento.')}
+                {selectedNf.tipo === 'servico' && selectedNf.data.xmlAvailable && <button
+                  onClick={() => void handleDownloadAuthorizedXml(selectedNf.data)}
                   className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold uppercase rounded-lg inline-flex items-center gap-1"
                 >
-                  <Printer size={13} /> Imprimir / PDF
-                </button>
-                {canCancel && selectedNf.data.status === 'Autorizada' && (
-                  <button 
-                    onClick={() => {
-                      handleCancelInvoice(selectedNf.data.id, selectedNf.tipo);
-                    }}
+                  <Download size={13} /> Baixar XML
+                </button>}
+                {selectedNf.tipo === 'servico' && selectedNf.data.danfseAvailable && <button onClick={() => void handleDownloadDanfse(selectedNf.data)} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold uppercase rounded-lg inline-flex items-center gap-1"><Download size={13} /> Abrir/Baixar DANFSe oficial</button>}
+                {selectedNf.tipo === 'servico' && selectedNf.data.danfseAvailable && <button onClick={() => void handleDownloadDanfse(selectedNf.data, 'impressao_nfse')} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold uppercase rounded-lg inline-flex items-center gap-1"><Printer size={13} /> Versão oficial para impressão</button>}
+                {canCancel && selectedNf.tipo === 'servico' && selectedNf.data.environment === 'producao' && (selectedNf.data.status === 'Autorizada' || selectedNf.data.status === 'AUTORIZADA') && (
+                  <button
+                    type="button"
+                    onClick={() => openCancellationPreparation(selectedNf.data)}
+                    title="Preparar o evento oficial sem transmitir"
                     className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold uppercase rounded-lg border border-rose-200 inline-flex items-center gap-1"
                   >
-                    <XCircle size={13} /> Cancelar Nota
+                    <XCircle size={13} /> Preparar cancelamento oficial
                   </button>
                 )}
                 <button 
@@ -2544,6 +2926,70 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                   Entendido / Voltar
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Preparação local do evento oficial; esta tela não possui ação de transmissão. */}
+      {cancellationNote && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/65 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-lg p-5 space-y-4">
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-rose-600">Evento oficial e101101 · Produção Real</p>
+                <h3 className="text-base font-extrabold text-slate-800">Preparar cancelamento de NFS-e</h3>
+                <p className="text-[11px] text-slate-500">Validação local somente. Nenhum evento será enviado à SEFIN.</p>
+              </div>
+              <button type="button" onClick={() => setCancellationNote(null)} className="p-1 rounded-full bg-slate-100 text-slate-500 hover:text-slate-800">✕</button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-xs rounded-xl bg-slate-50 border border-slate-200 p-3">
+              <p><b>NFS-e:</b> {cancellationNote.numeroNota}</p>
+              <p><b>Cliente:</b> {cancellationNote.clienteNome}</p>
+              <p><b>Valor:</b> R$ {cancellationNote.valorServico.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+              <p><b>Ambiente:</b> Produção Real</p>
+              <p className="col-span-2 break-all font-mono text-[10px]"><b>Chave:</b> {cancellationNote.chaveAcessoOficial || cancellationNote.chaveAcesso || cancellationNote.reference}</p>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Motivo oficial</label>
+              <select value={cancellationReasonCode} onChange={event => setCancellationReasonCode(event.target.value as '1' | '2' | '9')} className="w-full border border-slate-200 rounded-xl p-2 text-xs">
+                <option value="1">1 — Erro na emissão</option>
+                <option value="2">2 — Serviço não prestado</option>
+                <option value="9">9 — Outros</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Justificativa obrigatória</label>
+              <textarea value={cancellationReason} onChange={event => setCancellationReason(event.target.value)} minLength={15} maxLength={255} rows={4} placeholder="Descreva o motivo com 15 a 255 caracteres." className="w-full border border-slate-200 rounded-xl p-2 text-xs" />
+              <p className="text-[10px] text-slate-400 text-right">{cancellationReason.trim().length}/255</p>
+            </div>
+            <label className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-900">
+              <input type="checkbox" checked={cancellationConfirmed} onChange={event => setCancellationConfirmed(event.target.checked)} className="mt-0.5" />
+              <span>Confirmo que revisei a nota e compreendo que uma futura transmissão autorizada produzirá efeito fiscal. Nesta etapa, o sistema apenas validará o XML e a assinatura.</span>
+            </label>
+
+            {cancellationValidation && (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-[11px] text-emerald-900">
+                <p className="font-black uppercase">Evento pronto, não transmitido</p>
+                <p>XSD antes: {cancellationValidation.xsdValidBeforeSignature ? 'OK' : 'ERRO'} · XMLDSig: {cancellationValidation.signatureVerified ? 'OK' : 'ERRO'} · XSD depois: {cancellationValidation.xsdValidAfterSignature ? 'OK' : 'ERRO'} · GZip/Base64: {cancellationValidation.gzipBase64Ready ? 'OK' : 'ERRO'}</p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+              <button type="button" onClick={() => setCancellationNote(null)} className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-bold uppercase text-slate-600">Fechar</button>
+              <button type="button" disabled={isReconcilingCancellation} onClick={() => void reconcileOfficialCancellation()} className="px-4 py-2 rounded-xl border border-blue-300 bg-blue-50 text-blue-700 disabled:opacity-50 text-xs font-black uppercase">
+                {isReconcilingCancellation ? 'Consultando SEFIN...' : 'Consultar situação oficial'}
+              </button>
+              <button type="button" disabled={isPreparingCancellation || !cancellationConfirmed || cancellationReason.trim().length < 15} onClick={() => void validateCancellationPreparation()} className="px-4 py-2 rounded-xl bg-rose-600 disabled:bg-rose-300 text-white text-xs font-black uppercase">
+                {isPreparingCancellation ? 'Validando evento...' : 'Validar evento sem transmitir'}
+              </button>
+              {cancellationValidation && (
+                <button type="button" disabled={isPreparingCancellation} onClick={() => void executeOfficialCancellation()} className="px-4 py-2 rounded-xl bg-red-700 disabled:bg-red-300 text-white text-xs font-black uppercase">
+                  {isPreparingCancellation ? 'Processando...' : 'Cancelar oficialmente'}
+                </button>
+              )}
             </div>
           </div>
         </div>

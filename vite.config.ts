@@ -22,6 +22,12 @@ export default defineConfig(({mode}) => {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: false,
+      proxy: env.LOCAL_VERCEL_API_URL ? {
+        '/api': {
+          target: env.LOCAL_VERCEL_API_URL,
+          changeOrigin: true,
+        },
+      } : undefined,
     },
   };
 });
