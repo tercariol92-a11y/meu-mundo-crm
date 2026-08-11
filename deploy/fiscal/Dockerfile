@@ -7,6 +7,7 @@ COPY scripts/patch-baileys-profile-picture.cjs ./scripts/patch-baileys-profile-p
 RUN npm ci
 
 COPY . .
+RUN test -s server/fiscal/certificates/icp-brasil/2026-07-13/icp-brasil-bundle.pem
 RUN npm run build:fiscal
 
 ENV NODE_ENV=production

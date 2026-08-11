@@ -33,6 +33,7 @@ dist-fiscal/
 *.pfx
 *.p12
 *.pem
+!server/fiscal/certificates/icp-brasil/2026-07-13/icp-brasil-bundle.pem
 *.key
 serviceAccount*.json
 firebase-admin*.json
