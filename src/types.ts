@@ -49,6 +49,9 @@ export interface Usuario {
   empresaId?: string;
   nome: string;
   email: string;
+  telefone?: string;
+  whatsapp?: string;
+  celularWhatsapp?: string;
   photoURL?: string;
   userType: 'internal';
   role: UserRole; // Role principal (estratégico)

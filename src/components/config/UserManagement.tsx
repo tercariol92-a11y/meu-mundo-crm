@@ -80,6 +80,7 @@ export default function UserManagement({ user }: { user: UserType }) {
   const [formData, setFormData] = useState<Partial<Usuario & { password?: string }>>({
     nome: '',
     email: '',
+    whatsapp: '',
     role: 'vendedor',
     roles: ['vendedor'],
     ativo: true,
@@ -138,6 +139,7 @@ export default function UserManagement({ user }: { user: UserType }) {
       setFormData({
         nome: '',
         email: '',
+        whatsapp: '',
         role: 'vendedor',
         roles: ['vendedor'],
         ativo: true,
@@ -268,6 +270,12 @@ export default function UserManagement({ user }: { user: UserType }) {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.nome || !formData.email) return;
+    const normalizedWhatsapp = String(formData.whatsapp || '').replace(/\D/g, '');
+    if (normalizedWhatsapp && (normalizedWhatsapp.length < 10 || normalizedWhatsapp.length > 15)) {
+      setMessage({ type: 'error', text: 'Informe o WhatsApp com DDI, DDD e número válidos.' });
+      setExpandedSection('basic');
+      return;
+    }
 
     // Commission Validations
     if (formData.receivesCommission) {
@@ -306,7 +314,7 @@ export default function UserManagement({ user }: { user: UserType }) {
       setIsSaving(true);
       if (editingUser) {
         // Ensure meta is set if commission is enabled
-        const updateData = { ...formData };
+        const updateData = { ...formData, whatsapp: normalizedWhatsapp };
         if (updateData.receivesCommission && (!updateData.monthlyGoal || updateData.monthlyGoal <= 0)) {
            // Meta will be validated above, but just in case
         }
@@ -346,7 +354,7 @@ export default function UserManagement({ user }: { user: UserType }) {
           return;
         }
 
-        const { password, ...userData } = formData;
+        const { password, ...userData } = { ...formData, whatsapp: normalizedWhatsapp };
         await databaseService.adminCreateUser(formData.email, password!, userData as Omit<Usuario, 'id' | 'createdAt' | 'updatedAt'>);
         setMessage({ type: 'success', text: 'Usuário cadastrado com sucesso!' });
       }
@@ -859,6 +867,19 @@ export default function UserManagement({ user }: { user: UserType }) {
                           onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                           placeholder="email@mundotech.com.br"
                         />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant ml-1">WhatsApp para notificações de chamados</label>
+                        <input
+                          readOnly={!isEditingMode || !isLocalAdmin}
+                          type="tel"
+                          inputMode="tel"
+                          className="w-full px-5 py-3.5 bg-surface-container-highest/20 border border-surface-container-high rounded-2xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-primary/20 read-only:opacity-60"
+                          value={formData.whatsapp || ''}
+                          onChange={(e) => setFormData({ ...formData, whatsapp: e.target.value })}
+                          placeholder="Ex.: 5541999999999"
+                        />
+                        <p className="ml-1 text-[9px] font-bold text-on-surface-variant">Informe DDI + DDD + número. Usado para avisar quando um chamado for vinculado ao usuário.</p>
                       </div>
                       {!editingUser && (
                         <div className="space-y-1.5">

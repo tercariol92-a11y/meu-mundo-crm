@@ -211,12 +211,10 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
       let signatureUrl = existingSignature || '';
       let signaturePath = chamado.customerSignaturePath || '';
       if (hasNewSignature && sigPad.current) {
-        setSignatureStatus('saving');
-        const signatureData = sigPad.current.getCanvas().toDataURL('image/png');
-        const uploaded = await serviceOrderSignatureService.uploadCustomerSignature(chamado.id, signatureData);
+        const uploaded = await saveCurrentSignature();
+        if (!uploaded) throw new Error('Não foi possível confirmar o salvamento da assinatura.');
         signatureUrl = uploaded.url;
         signaturePath = uploaded.storagePath;
-        setSignatureStatus('saved');
       }
       const signedAt = chamado.customerSignedAt || chamado.assinaturaData || new Date().toISOString();
       const signedBy = chamado.customerSignedBy || (chamado.cliente as any)?.responsavelNome || chamado.clienteNome || 'Cliente';
@@ -295,6 +293,47 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
 
   const clearSignature = () => {
     if (sigPad.current) sigPad.current.clear();
+    setSignatureStatus('idle');
+  };
+
+  const saveCurrentSignature = async () => {
+    if (!chamado || !sigPad.current || sigPad.current.isEmpty()) {
+      setError('Solicite a assinatura do cliente antes de salvar.');
+      return null;
+    }
+    setError(null);
+    setSignatureStatus('saving');
+    try {
+      const signatureData = sigPad.current.getCanvas().toDataURL('image/png');
+      const uploaded = await serviceOrderSignatureService.uploadCustomerSignature(chamado.id, signatureData);
+      const signedAt = new Date().toISOString();
+      const signedBy = (chamado.cliente as any)?.responsavelNome || chamado.clienteNome || 'Cliente';
+      await databaseService.updateChamado(chamado.id, {
+        assinaturaCliente: uploaded.url,
+        assinaturaData: signedAt,
+        customerSignatureUrl: uploaded.url,
+        customerSignaturePath: uploaded.storagePath,
+        customerSignedAt: signedAt,
+        customerSignedBy: signedBy,
+        customerSignatureMimeType: uploaded.mimeType,
+      });
+      setChamado(previous => previous ? {
+        ...previous,
+        assinaturaCliente: uploaded.url,
+        assinaturaData: signedAt,
+        customerSignatureUrl: uploaded.url,
+        customerSignaturePath: uploaded.storagePath,
+        customerSignedAt: signedAt,
+        customerSignedBy: signedBy,
+        customerSignatureMimeType: uploaded.mimeType,
+      } : previous);
+      setSignatureStatus('saved');
+      return uploaded;
+    } catch (signatureError) {
+      setSignatureStatus('idle');
+      setError(signatureError instanceof Error ? signatureError.message : 'Não foi possível salvar a assinatura.');
+      return null;
+    }
   };
 
   if (loading) {
@@ -457,7 +496,7 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
                     className="flex-1 bg-surface-container-highest border-none rounded-xl px-4 py-2 text-xs focus:ring-2 focus:ring-primary/20"
                     onKeyPress={(e) => e.key === 'Enter' && addChecklistItem()}
                   />
-                  <button 
+                  <button
                     onClick={addChecklistItem}
                     className="p-2 bg-primary text-white rounded-xl hover:scale-105 transition-all"
                   >
@@ -527,12 +566,23 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
             <div className="flex items-center justify-between">
               <label className={labelClass}>Assinatura do Cliente</label>
               {chamado.status !== 'concluido' && (
-                <button 
-                  onClick={clearSignature}
-                  className="text-[10px] font-black uppercase tracking-widest text-error hover:bg-error/10 px-3 py-1.5 rounded-lg transition-all"
-                >
-                  Limpar
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void saveCurrentSignature()}
+                    disabled={signatureStatus === 'saving'}
+                    className="text-[10px] font-black uppercase tracking-widest text-emerald-700 hover:bg-emerald-50 px-3 py-1.5 rounded-lg transition-all disabled:opacity-50"
+                  >
+                    Salvar assinatura
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearSignature}
+                    className="text-[10px] font-black uppercase tracking-widest text-error hover:bg-error/10 px-3 py-1.5 rounded-lg transition-all"
+                  >
+                    Limpar
+                  </button>
+                </div>
               )}
             </div>
             <div className="bg-white rounded-3xl border-2 border-dashed border-surface-container-high overflow-hidden">
