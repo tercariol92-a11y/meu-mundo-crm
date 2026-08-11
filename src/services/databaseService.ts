@@ -34,6 +34,7 @@ import {
 } from 'firebase/storage';
 import { auth, db, storage, firebaseConfig, triggerMockAuthStateChanged, onAuthStateChanged } from '../firebase';
 import { whatsappService } from './whatsapp.service';
+import { notifyAssignedTechnician, requestTicketSatisfaction } from './supportTicketNotifications';
 import { calculateProposalTotals, proposalTotals } from '../utils/proposalTotals';
 import { 
   Usuario, 
@@ -2681,6 +2682,8 @@ export const databaseService = {
       });
       const result = { id: docRef.id, ...chamado, ...slaData };
 
+      if (chamado.tecnicoId) void notifyAssignedTechnician(result as Chamado).catch(error => console.error('[SUPPORT TECHNICIAN NOTIFICATION]', error));
+
       // Trigger WhatsApp: Chamado Aberto
       if (chamado.clienteId) {
         this.getClienteById(chamado.clienteId).then(cliente => {
@@ -2698,7 +2701,9 @@ export const databaseService = {
 
   async updateChamado(id: string, chamado: Partial<Chamado>) {
     try {
-      const updateData: any = { ...chamado };
+      const previousTicket = (chamado.tecnicoId !== undefined || chamado.status === 'concluido') ? await this.getChamadoById(id) : null;
+      const { sendSatisfactionSurvey, ...persistedFields } = chamado;
+      const updateData: any = { ...persistedFields };
       
       if (chamado.status === 'em_atendimento' && !chamado.dataInicioAtendimento) {
         updateData.dataInicioAtendimento = new Date().toISOString();
@@ -2718,6 +2723,12 @@ export const databaseService = {
         updatedAt: serverTimestamp()
       });
 
+      const technicianChanged = chamado.tecnicoId !== undefined && chamado.tecnicoId !== previousTicket?.tecnicoId;
+      if (technicianChanged) void this.getChamadoById(id).then(updated => updated && notifyAssignedTechnician(updated)).catch(error => console.error('[SUPPORT TECHNICIAN NOTIFICATION]', error));
+      if (chamado.status === 'concluido' && sendSatisfactionSurvey !== false && previousTicket?.status !== 'concluido') {
+        void this.getChamadoById(id).then(updated => updated && requestTicketSatisfaction(updated)).catch(error => console.error('[SUPPORT SATISFACTION NOTIFICATION]', error));
+      }
+
       // Trigger WhatsApp based on status change
       if (chamado.status || chamado.statusTecnico || chamado.dataInicioAtendimento) {
         this.getChamadoById(id).then(updatedTicket => {
@@ -2725,7 +2736,7 @@ export const databaseService = {
             const phone = updatedTicket.cliente.celularWhatsapp;
             const name = updatedTicket.cliente.nomeFantasia || 'Cliente';
 
-            if (chamado.status === 'concluido') {
+            if (chamado.status === 'concluido' && sendSatisfactionSurvey === false) {
               whatsappService.sendAtendimentoFinalizado(phone, name);
             } else if (chamado.status === 'aguardando_cliente') {
               whatsappService.sendAguardandoRetorno(phone, name);
@@ -3837,6 +3848,13 @@ export const databaseService = {
 
   async deleteContratoRecorrente(id: string): Promise<any> {
     try {
+      const billingSnap = await getDocs(collection(db, 'faturamentos_recorrentes'));
+      for (const billingDoc of billingSnap.docs) {
+        const billing = billingDoc.data() as any;
+        if (billing.contractId === id && ['PENDENTE', 'PENDENCIA_CADASTRAL', 'PRONTO_PARA_EMITIR', 'REJEITADA'].includes(billing.status)) {
+          await deleteDoc(doc(db, 'faturamentos_recorrentes', billingDoc.id));
+        }
+      }
       await deleteDoc(doc(db, 'contratos', id));
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, 'contratos');

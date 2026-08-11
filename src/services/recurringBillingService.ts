@@ -1,6 +1,7 @@
 import { db } from '../firebase';
-import { Cliente, ContratoRecorrente, FaturamentoRecorrente } from '../types';
-import { collection, doc, getDoc, getDocs, serverTimestamp, setDoc, updateDoc } from './resilientFirestoreClient';
+import { Cliente, ConfiguracaoFiscal, ContratoRecorrente, FaturamentoRecorrente } from '../types';
+import { collection, deleteDoc, doc, getDoc, getDocs, serverTimestamp, setDoc, updateDoc } from './resilientFirestoreClient';
+import { validateNfseDraftData } from './nfseIssuanceService';
 
 const COLLECTION = 'faturamentos_recorrentes';
 
@@ -22,56 +23,60 @@ export function contractIsDue(contract: ContratoRecorrente, competence: string) 
   return months % periodStep[contract.tipoCobranca] === 0;
 }
 
-export function validateRecurringTaker(client?: Cliente) {
-  const missing: string[] = [];
-  if (!client) return ['cliente'];
-  if (!client.razaoSocial && !client.nomeFantasia) missing.push('razão social');
-  const taxId = digits(client.cnpj || client.pagadorCpfCnpj);
-  if (![11, 14].includes(taxId.length)) missing.push('CPF/CNPJ');
-  if (!client.cep) missing.push('CEP');
-  if (!client.rua) missing.push('logradouro');
-  if (!client.numero) missing.push('número');
-  if (!client.bairro) missing.push('bairro');
-  if (!client.cidade) missing.push('município');
-  if (!client.estado) missing.push('UF');
-  if (!(client as any).codigoIbge) missing.push('código IBGE');
-  if (!client.emailFinanceiro && !client.emailPrincipal) missing.push('e-mail fiscal');
-  return missing;
-}
-
-export function buildRecurringBilling(companyId: string, contract: ContratoRecorrente, client: Cliente | undefined, competence: string, environment: 'producao' | 'producao_restrita'): FaturamentoRecorrente {
-  const missingFields = validateRecurringTaker(client);
+export function buildRecurringBilling(companyId: string, contract: ContratoRecorrente, client: Cliente | undefined, competence: string, environment: 'producao' | 'producao_restrita', config?: ConfiguracaoFiscal | null): FaturamentoRecorrente {
   const fiscal = contract.fiscal;
-  if (!fiscal?.descricaoServico) missingFields.push('descrição fiscal');
-  if (!fiscal?.codigoServicoMunicipal) missingFields.push('código de serviço municipal');
-  if (!fiscal?.itemLc116) missingFields.push('item LC 116');
-  if (!fiscal?.municipioPrestacao) missingFields.push('município de prestação');
-  if (!Number(fiscal?.valorNfse || contract.valorMensal)) missingFields.push('valor da NFS-e');
   const [year, month] = competence.split('-').map(Number);
   const maxDay = new Date(year, month, 0).getDate();
   const date = (day: number) => `${competence}-${String(Math.min(Math.max(day, 1), maxDay)).padStart(2, '0')}`;
   const logicalKey = recurringBillingLogicalKey(companyId, contract.id, competence);
-  return {
+  const candidate: FaturamentoRecorrente = {
     id: logicalKey, logicalKey, companyId, contractId: contract.id, contractNumber: contract.numeroContrato,
     clientId: contract.clienteId, clientName: contract.clienteNome, competence, installment: 1,
     description: fiscal?.descricaoServico || contract.descricaoServico,
     expectedAmount: Number(fiscal?.valorNfse || contract.valorMensal), billingDate: date(contract.diaFaturamento), dueDate: date(contract.diaVencimento),
-    status: missingFields.length ? 'PENDENCIA_CADASTRAL' : 'PRONTO_PARA_EMITIR', missingFields, environment,
-    takerSnapshot: client ? { razaoSocial: client.razaoSocial || client.nomeFantasia, cpfCnpj: digits(client.cnpj || client.pagadorCpfCnpj), inscricaoMunicipal: client.inscricaoMunicipal || '', endereco: client.rua, numero: client.numero, bairro: client.bairro, cep: digits(client.cep), municipio: client.cidade, uf: client.estado, codigoIbge: (client as any).codigoIbge || '', emailFiscal: client.emailFinanceiro || client.emailPrincipal } : {},
+    status: 'PENDENCIA_CADASTRAL', missingFields: [], environment,
+    takerSnapshot: client ? { razaoSocial: client.razaoSocial || client.nomeFantasia, cpfCnpj: digits(client.cnpj || client.pagadorCpfCnpj), inscricaoMunicipal: client.inscricaoMunicipal || '', endereco: client.rua, numero: client.numero, bairro: client.bairro, cep: digits(client.cep), municipio: client.cidade, uf: client.estado, codigoIbge: client.codigoIbge || '', emailFiscal: client.emailFinanceiro || client.emailPrincipal } : {},
     fiscalSnapshot: fiscal || {}, generateBoleto: fiscal?.gerarBoleto === true,
   };
+  const validationIssues = validateNfseDraftData({ client, config, description: candidate.description, amount: candidate.expectedAmount, competence, recurring: candidate, issWithheld: fiscal?.issRetido === true });
+  candidate.validationIssues = validationIssues;
+  candidate.missingFields = validationIssues.map(issue => issue.label);
+  candidate.status = validationIssues.length ? 'PENDENCIA_CADASTRAL' : 'PRONTO_PARA_EMITIR';
+  return candidate;
 }
 
-export async function generateRecurringBillings(companyId: string, contracts: ContratoRecorrente[], clients: Cliente[], competence: string, environment: 'producao' | 'producao_restrita') {
+export async function generateRecurringBillings(companyId: string, contracts: ContratoRecorrente[], clients: Cliente[], competence: string, environment: 'producao' | 'producao_restrita', config?: ConfiguracaoFiscal | null) {
   const generated: FaturamentoRecorrente[] = [];
+  const officialContractIds = new Set(contracts.map(contract => contract.id));
+  const currentBillings = (await getDocs(collection(db, COLLECTION))).docs.map(item => ({ id: item.id, ...item.data() } as FaturamentoRecorrente));
+  for (const billing of currentBillings.filter(item => item.companyId === companyId && !officialContractIds.has(item.contractId) && ['PENDENTE', 'PENDENCIA_CADASTRAL', 'PRONTO_PARA_EMITIR', 'REJEITADA'].includes(item.status))) {
+    await deleteDoc(doc(db, COLLECTION, billing.id));
+  }
   for (const contract of contracts.filter(item => contractIsDue(item, competence))) {
-    const candidate = buildRecurringBilling(companyId, contract, clients.find(client => client.id === contract.clienteId), competence, environment);
+    const candidate = buildRecurringBilling(companyId, contract, clients.find(client => client.id === contract.clienteId), competence, environment, config);
     const ref = doc(db, COLLECTION, candidate.id);
     const existing = await getDoc(ref);
-    if (!existing.exists()) await setDoc(ref, { ...candidate, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-    generated.push(existing.exists() ? ({ id: existing.id, ...existing.data() } as FaturamentoRecorrente) : candidate);
+    if (!existing.exists()) {
+      await setDoc(ref, { ...candidate, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      generated.push(candidate);
+    } else {
+      const current = { id: existing.id, ...existing.data() } as FaturamentoRecorrente;
+      if (!['AUTORIZADA', 'CANCELADA', 'EM_PROCESSAMENTO'].includes(current.status)) {
+        await setDoc(ref, { ...candidate, createdAt: current.createdAt || serverTimestamp(), updatedAt: serverTimestamp() }, { merge: true });
+        generated.push({ ...current, ...candidate });
+      } else generated.push(current);
+    }
   }
   return generated;
+}
+
+export async function removePendingRecurringBillingsForContract(contractId: string) {
+  const snap = await getDocs(collection(db, COLLECTION));
+  const removable = snap.docs
+    .map(item => ({ id: item.id, ...item.data() } as FaturamentoRecorrente))
+    .filter(item => item.contractId === contractId && ['PENDENTE', 'PENDENCIA_CADASTRAL', 'PRONTO_PARA_EMITIR', 'REJEITADA'].includes(item.status));
+  for (const billing of removable) await deleteDoc(doc(db, COLLECTION, billing.id));
+  return removable.length;
 }
 
 export async function listRecurringBillings(companyId: string) {

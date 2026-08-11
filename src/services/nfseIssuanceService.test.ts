@@ -3,7 +3,7 @@ import test from 'node:test';
 import { buildValidatedNfseDraft, issueNfseWithValidatedEngine } from './nfseIssuanceService';
 
 const client: any = { id:'c1', razaoSocial:'CLIENTE TESTE', nomeFantasia:'CLIENTE', cnpj:'48088816000145', cep:'80000000', rua:'Rua Teste', numero:'10', bairro:'Centro', cidade:'Curitiba', estado:'PR', codigoIbge:'4106902', emailFinanceiro:'fiscal@example.com' };
-const config: any = { cnpj:'56096046000100', razaoSocial:'MUNDO TECH', inscricaoMunicipal:'13448760', codigoServicoMunicipal:'010701', nbs:'120012000', aliquotaIssPadrao:6 };
+const config: any = { cnpj:'56096046000100', razaoSocial:'MUNDO TECH', inscricaoMunicipal:'13448760', codigoIbge:'4106902', codigoServicoMunicipal:'010701', itemListaServico:'14.01', nbs:'120012000', aliquotaIssPadrao:6 };
 const billing: any = { id:'empresa__ctr__2026-08__1', contractId:'ctr', competence:'2026-08', fiscalSnapshot:{ codigoServicoMunicipal:'010701', itemLc116:'14.01', nbs:'120012000', aliquotaIss:6, issRetido:false }, generateBoleto:false };
 
 test('manual and recurring issuance share the validated engine payload', async () => {

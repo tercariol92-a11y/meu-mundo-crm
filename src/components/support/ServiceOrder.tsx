@@ -58,6 +58,7 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [signatureStatus, setSignatureStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [sendSatisfactionSurvey, setSendSatisfactionSurvey] = useState(true);
   const sigPad = useRef<SignatureCanvas>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   
@@ -232,7 +233,8 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
         customerSignedAt: signedAt,
         customerSignedBy: signedBy,
         customerSignatureMimeType: 'image/png',
-        dataFechamento: new Date().toISOString()
+        dataFechamento: new Date().toISOString(),
+        sendSatisfactionSurvey
       });
       const persisted = await databaseService.getChamadoById(chamado.id);
       if (!persisted || persisted.status !== 'concluido' || !persisted.customerSignatureUrl) {
@@ -556,10 +558,22 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
             {signatureStatus === 'saving' && <p className="text-xs font-bold text-primary flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Salvando assinatura...</p>}
             {signatureStatus === 'saved' && <p className="text-xs font-bold text-green-700 flex items-center gap-2"><Check size={14} /> Assinatura salva com sucesso.</p>}
           </div>
+
+          {Boolean(chamado.communicationHistory?.length) && <div className="space-y-3">
+            <label className={labelClass}>Histórico de comunicações</label>
+            <div className="space-y-2">
+              {chamado.communicationHistory!.slice().reverse().map((entry, index) => <div key={`${entry.createdAt}-${index}`} className="rounded-2xl border border-surface-container-high bg-surface-container-low px-4 py-3 text-xs">
+                <div className="flex items-center justify-between gap-3"><span className="font-black uppercase tracking-wider">{entry.type === 'whatsapp_tecnico' ? 'WhatsApp técnico' : 'Pesquisa de satisfação'}</span><span className={entry.status === 'sent' ? 'font-bold text-emerald-700' : 'font-bold text-red-700'}>{entry.status === 'sent' ? 'Enviado' : 'Erro'}</span></div>
+                <p className="mt-1 text-on-surface-variant">{new Date(entry.createdAt).toLocaleString('pt-BR')}{entry.destinationMasked ? ` · ${entry.destinationMasked}` : ''}</p>
+                {entry.error && <p className="mt-1 text-red-700">{entry.error}</p>}
+              </div>)}
+            </div>
+          </div>}
         </div>
 
         {/* Footer */}
         <div className="px-8 py-6 border-t border-surface-container-high bg-surface-container-low/50 flex flex-col gap-4">
+          {chamado.status !== 'concluido' && <label className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-900"><input type="checkbox" checked={sendSatisfactionSurvey} onChange={event => setSendSatisfactionSurvey(event.target.checked)} className="h-4 w-4 accent-emerald-600"/> Enviar pesquisa de satisfação ao cliente via WhatsApp após concluir</label>}
           <AnimatePresence>
             {error && (
               <motion.div 

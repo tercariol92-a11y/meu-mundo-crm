@@ -57,8 +57,10 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
   const [isPreparingCancellation, setIsPreparingCancellation] = useState(false);
   const [isReconcilingCancellation, setIsReconcilingCancellation] = useState(false);
   const [cancellationValidation, setCancellationValidation] = useState<Record<string, unknown> | null>(null);
-  const [manualDanfseFlow, setManualDanfseFlow] = useState<{ accessKey: string; portalUrl: string } | null>(null);
-  const danfsePortalWindowRef = useRef<Window | null>(null);
+  const [danfsePreview, setDanfsePreview] = useState<{ url: string; fileName: string; nfs: NotaFiscalServico } | null>(null);
+  const [isPreparingDanfse, setIsPreparingDanfse] = useState(false);
+
+  useEffect(() => () => { if (danfsePreview?.url) URL.revokeObjectURL(danfsePreview.url); }, [danfsePreview?.url]);
 
   // XML Importation States
   const [isImportXmlModalOpen, setIsImportXmlModalOpen] = useState(false);
@@ -1188,68 +1190,40 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
     catch (error) { showToast(error instanceof Error ? error.message : 'Falha ao baixar XML.', 'error'); }
   };
 
-  const openOfficialDanfsePortal = (accessKey: string, existingWindow?: Window | null, environment: 'producao' | 'producao_restrita' = 'producao_restrita') => {
-    if (!/^\d{50}$/.test(accessKey)) throw new Error('Chave de acesso da NFS-e inválida.');
-    const popup = existingWindow && !existingWindow.closed ? existingWindow : window.open('', '_blank');
-    if (!popup) return null;
-    const document = popup.document;
-    document.title = 'Abrindo Portal Nacional da NFS-e';
-    document.body.textContent = 'Abrindo consulta oficial da NFS-e...';
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = environment === 'producao'
-      ? 'https://www.nfse.gov.br/ConsultaPublica/'
-      : 'https://www.producaorestrita.nfse.gov.br/ConsultaPublica/';
-    for (const [name, value] of [['TipoConsulta', '1'], ['ChaveAcesso', accessKey]]) {
-      const input = document.createElement('input');
-      input.type = 'hidden'; input.name = name; input.value = value;
-      form.appendChild(input);
-    }
-    document.body.appendChild(form);
-    form.submit();
-    return popup;
+  const danfseAccessKey = (nfs: NotaFiscalServico) => nfs.chaveAcessoOficial || nfs.chaveAcesso || nfs.reference || nfs.codigoVerificacao || '';
+
+  const handleViewDanfse = async (nfs: NotaFiscalServico) => {
+    const accessKey = danfseAccessKey(nfs);
+    if (!accessKey) return showToast('Esta NFS-e não possui chave de acesso.', 'error');
+    setIsPreparingDanfse(true);
+    try {
+      const file = await fiscalApi.prepareDanfseV2(accessKey);
+      if (danfsePreview?.url) URL.revokeObjectURL(danfsePreview.url);
+      setDanfsePreview({ url: URL.createObjectURL(file.blob), fileName: file.fileName, nfs });
+      await recordFiscalOperationalAudit('consulta_nfse', nfs);
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Falha ao gerar DANFSe.', 'error'); }
+    finally { setIsPreparingDanfse(false); }
   };
 
-  const handleDownloadDanfse = async (nfs: NotaFiscalServico, auditAction: 'download_danfse_nfse' | 'impressao_nfse' = 'download_danfse_nfse') => {
+  const handleDownloadDanfse = async (nfs: NotaFiscalServico) => {
     const accessKey = nfs.chaveAcessoOficial || nfs.chaveAcesso || nfs.reference || nfs.codigoVerificacao;
     if (!accessKey) return showToast('Esta NFS-e não possui chave de acesso.', 'error');
-    const fiscalEnvironment = (nfs as NotaFiscalServico & { environment?: string }).environment === 'producao' ? 'producao' : 'producao_restrita';
-    const portalUrl = fiscalEnvironment === 'producao'
-      ? 'https://www.nfse.gov.br/ConsultaPublica/'
-      : 'https://www.producaorestrita.nfse.gov.br/ConsultaPublica/';
-    try { await navigator.clipboard.writeText(accessKey); } catch { /* A chave também fica visível no diálogo. */ }
-    const pendingPortal = window.open('', '_blank');
-    const credentials = fiscalEnvironment === 'producao_restrita' ? certificateSessionRef.current : null;
-    if (credentials) {
-      try {
-        await fiscalApi.downloadRestrictedDanfse(accessKey, { ...credentials, expectedCnpj: configFiscal?.cnpj || '' });
-        await recordFiscalOperationalAudit(auditAction, nfs);
-        pendingPortal?.close();
-        showToast('DANFSe oficial baixado com sucesso.');
-        return;
-      } catch (error) {
-        const code = (error as Error & { code?: string }).code;
-        if (code !== 'OFFICIAL_DANFSE_CAPTCHA_REQUIRED') {
-          pendingPortal?.close();
-          showToast(error instanceof Error ? error.message : 'DANFSe ainda não disponível.', 'error');
-          return;
-        }
-      }
-    }
-    danfsePortalWindowRef.current = openOfficialDanfsePortal(accessKey, pendingPortal, fiscalEnvironment);
-    setManualDanfseFlow({ accessKey, portalUrl });
-    await recordFiscalOperationalAudit(auditAction, nfs);
+    try { await fiscalApi.downloadDanfseV2(accessKey); await recordFiscalOperationalAudit('download_danfse_nfse', nfs); showToast('DANFSe v2.0 baixado com sucesso.'); }
+    catch (error) { showToast(error instanceof Error ? error.message : 'Falha ao baixar DANFSe.', 'error'); }
   };
 
-  const continueManualDanfseFlow = () => {
-    if (!manualDanfseFlow) return;
-    if (danfsePortalWindowRef.current && !danfsePortalWindowRef.current.closed) danfsePortalWindowRef.current.focus();
-    else danfsePortalWindowRef.current = openOfficialDanfsePortal(
-      manualDanfseFlow.accessKey,
-      undefined,
-      manualDanfseFlow.portalUrl.includes('producaorestrita') ? 'producao_restrita' : 'producao',
-    );
-    showToast('Continue no Portal Nacional e use o botão oficial para baixar o DANFSe.', 'info');
+  const handlePrintDanfse = async (nfs: NotaFiscalServico) => {
+    const accessKey = danfseAccessKey(nfs);
+    if (!accessKey) return showToast('Esta NFS-e não possui chave de acesso.', 'error');
+    const popup = window.open('', '_blank');
+    if (!popup) return showToast('Permita a abertura da janela de impressão.', 'error');
+    popup.document.body.textContent = 'Preparando DANFSe v2.0...';
+    try {
+      const file = await fiscalApi.prepareDanfseV2(accessKey); const url = URL.createObjectURL(file.blob);
+      popup.location.href = url;
+      popup.addEventListener('load', () => { popup.focus(); popup.print(); setTimeout(() => URL.revokeObjectURL(url), 60_000); }, { once: true });
+      await recordFiscalOperationalAudit('impressao_nfse', nfs);
+    } catch (error) { popup.close(); showToast(error instanceof Error ? error.message : 'Falha ao imprimir DANFSe.', 'error'); }
   };
 
   const filteredBoletos = boletos.filter(b => {
@@ -1285,29 +1259,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
         </div>
       )}
 
-      {manualDanfseFlow && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="danfse-captcha-title">
-          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-            <div className="flex items-start gap-3">
-              <div className="rounded-xl bg-indigo-50 p-2 text-indigo-600"><Shield size={22} /></div>
-              <div>
-                <h3 id="danfse-captcha-title" className="text-base font-bold text-slate-900">Validação oficial do DANFSe</h3>
-                <p className="mt-2 text-sm text-slate-600">Resolva o hCaptcha no Portal Nacional e depois clique em Continuar.</p>
-              </div>
-            </div>
-            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Chave da NFS-e copiada</p>
-              <p className="mt-1 break-all font-mono text-xs text-slate-800">{manualDanfseFlow.accessKey}</p>
-            </div>
-            <p className="mt-3 text-xs text-slate-500">A validação e o download acontecem exclusivamente no Portal Nacional. O CRM não gera nem modifica o PDF.</p>
-            <div className="mt-5 flex flex-wrap justify-end gap-2">
-              <button type="button" onClick={() => setManualDanfseFlow(null)} className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-bold uppercase text-slate-700 hover:bg-slate-50">Fechar</button>
-              <button type="button" onClick={() => { void navigator.clipboard.writeText(manualDanfseFlow.accessKey); danfsePortalWindowRef.current = openOfficialDanfsePortal(manualDanfseFlow.accessKey); }} className="rounded-lg border border-indigo-200 px-4 py-2 text-xs font-bold uppercase text-indigo-700 hover:bg-indigo-50">Reabrir portal</button>
-              <button type="button" onClick={continueManualDanfseFlow} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold uppercase text-white hover:bg-indigo-700">Continuar</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {danfsePreview && <div className="fixed inset-0 z-[190] flex items-center justify-center bg-slate-950/70 p-4" role="dialog" aria-modal="true" aria-label="Visualizar DANFSe v2.0"><div className="flex h-[94vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b px-4 py-3"><div><h3 className="font-bold text-slate-900">DANFSe v2.0 · NFS-e {danfsePreview.nfs.numeroNota}</h3><p className="text-xs text-slate-500">Gerado exclusivamente do XML autorizado · NT 008/2026 v1.02</p></div><div className="flex gap-2"><button onClick={() => void handlePrintDanfse(danfsePreview.nfs)} className="rounded-lg border px-3 py-2 text-xs font-bold"><Printer size={14} className="inline mr-1"/>IMPRIMIR</button><button onClick={() => void handleDownloadDanfse(danfsePreview.nfs)} className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white"><Download size={14} className="inline mr-1"/>BAIXAR PDF</button><button onClick={() => setDanfsePreview(null)} className="rounded-lg border px-3 py-2 text-xs font-bold">FECHAR</button></div></div><iframe title={danfsePreview.fileName} src={danfsePreview.url} className="h-full w-full bg-slate-100" /></div></div>}
 
       {/* Main Fiscal Tab Row switcher */}
       <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-xs mb-6">
@@ -1774,19 +1726,22 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                               {nfs.status}
                             </span>
                           </td>
-                          <td className="p-3 text-right space-x-1">
+                          <td className="p-3"><div className="flex flex-wrap items-center justify-end gap-1.5">
                             <button 
                               onClick={() => handleViewInvoice('servico', nfs)}
                               title="Visualizar NFS-e"
-                              className="p-1 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded"
+                              className="inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[10px] font-bold text-slate-600 hover:bg-slate-100"
                             >
-                              <Search size={14} />
+                              <Search size={13} /> Visualizar
                             </button>
-                            {(nfs.status === 'AUTORIZADA' || nfs.status === 'Autorizada') && nfs.xmlAvailable && (
-                              <button onClick={() => void handleDownloadAuthorizedXml(nfs)} title="Baixar XML autorizado" className="p-1 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded"><Download size={14} /></button>
-                            )}
                             {(nfs.status === 'AUTORIZADA' || nfs.status === 'Autorizada') && nfs.danfseAvailable && (
-                              <button onClick={() => void handleDownloadDanfse(nfs)} title="Baixar DANFSe/PDF" className="p-1 text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 rounded"><Printer size={14} /></button>
+                              <>
+                                <button onClick={() => void handleViewDanfse(nfs)} disabled={isPreparingDanfse} title="Visualizar DANFSe" className="inline-flex items-center gap-1 rounded border border-indigo-200 px-2 py-1 text-[10px] font-bold text-indigo-600 hover:bg-indigo-50 disabled:opacity-40"><FileText size={13} /> DANFSe</button>
+                                <button onClick={() => void handlePrintDanfse(nfs)} title="Imprimir DANFSe" className="inline-flex items-center gap-1 rounded border border-violet-200 px-2 py-1 text-[10px] font-bold text-violet-600 hover:bg-violet-50"><Printer size={13} /> Imprimir</button>
+                              </>
+                            )}
+                            {(nfs.status === 'AUTORIZADA' || nfs.status === 'Autorizada') && nfs.xmlAvailable && (
+                              <button onClick={() => void handleDownloadAuthorizedXml(nfs)} title="Baixar XML autorizado" className="inline-flex items-center gap-1 rounded border border-blue-200 px-2 py-1 text-[10px] font-bold text-blue-600 hover:bg-blue-50"><Download size={13} /> XML</button>
                             )}
                             {canCancel && nfs.environment === 'producao' && (nfs.status === 'AUTORIZADA' || nfs.status === 'Autorizada') && (
                               <button
@@ -1798,7 +1753,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                                 <XCircle size={14} />
                               </button>
                             )}
-                          </td>
+                          </div></td>
                         </tr>
                       ))}
                     </tbody>
@@ -2907,8 +2862,9 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                 >
                   <Download size={13} /> Baixar XML
                 </button>}
-                {selectedNf.tipo === 'servico' && selectedNf.data.danfseAvailable && <button onClick={() => void handleDownloadDanfse(selectedNf.data)} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold uppercase rounded-lg inline-flex items-center gap-1"><Download size={13} /> Abrir/Baixar DANFSe oficial</button>}
-                {selectedNf.tipo === 'servico' && selectedNf.data.danfseAvailable && <button onClick={() => void handleDownloadDanfse(selectedNf.data, 'impressao_nfse')} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold uppercase rounded-lg inline-flex items-center gap-1"><Printer size={13} /> Versão oficial para impressão</button>}
+                {selectedNf.tipo === 'servico' && selectedNf.data.danfseAvailable && <button onClick={() => void handleViewDanfse(selectedNf.data)} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold uppercase rounded-lg inline-flex items-center gap-1"><FileText size={13} /> Visualizar DANFSe</button>}
+                {selectedNf.tipo === 'servico' && selectedNf.data.danfseAvailable && <button onClick={() => void handlePrintDanfse(selectedNf.data)} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold uppercase rounded-lg inline-flex items-center gap-1"><Printer size={13} /> Imprimir</button>}
+                {selectedNf.tipo === 'servico' && selectedNf.data.danfseAvailable && <button onClick={() => void handleDownloadDanfse(selectedNf.data)} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold uppercase rounded-lg inline-flex items-center gap-1"><Download size={13} /> Baixar PDF</button>}
                 {canCancel && selectedNf.tipo === 'servico' && selectedNf.data.environment === 'producao' && (selectedNf.data.status === 'Autorizada' || selectedNf.data.status === 'AUTORIZADA') && (
                   <button
                     type="button"

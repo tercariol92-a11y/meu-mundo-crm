@@ -167,6 +167,7 @@ export interface Cliente {
   bairro?: string;
   cidade?: string;
   estado?: string;
+  codigoIbge?: string;
   pais?: string;
   
   // 4. Dados Comerciais
@@ -254,6 +255,8 @@ export interface Tecnico {
   usuarioId: string;
   nome: string;
   fotoUrl?: string;
+  telefone?: string;
+  whatsapp?: string;
   especialidade?: string;
   status: string;
   createdAt?: string;
@@ -423,6 +426,25 @@ export interface Chamado {
   criadoPor?: string;
   criadoPorNome?: string;
   criadoPorEmail?: string;
+  communicationHistory?: Array<{
+    type: 'whatsapp_tecnico' | 'satisfaction_survey';
+    status: 'sent' | 'error';
+    createdAt: string;
+    destinationMasked?: string;
+    messageId?: string;
+    error?: string;
+  }>;
+  sendSatisfactionSurvey?: boolean;
+  satisfactionSurveyStatus?: 'pending' | 'answered' | 'send_failed';
+  satisfactionTokenHash?: string;
+  satisfactionRequestedAt?: string;
+  satisfactionRating?: number;
+  satisfactionComment?: string;
+  satisfactionAnsweredAt?: string;
+  satisfactionTechnicianId?: string;
+  satisfactionTechnicianName?: string;
+  satisfactionClientName?: string;
+  satisfactionOrigin?: 'whatsapp';
   // Joins
   cliente?: Cliente;
   unidade?: Unidade;
@@ -1296,6 +1318,7 @@ export interface FaturamentoRecorrente {
   dueDate: string;
   status: RecurringBillingStatus;
   missingFields: string[];
+  validationIssues?: Array<{ key: string; origin: 'cliente' | 'contrato' | 'configuracao_fiscal'; label: string }>;
   environment: 'producao' | 'producao_restrita';
   takerSnapshot: Record<string, unknown>;
   fiscalSnapshot: Record<string, unknown>;

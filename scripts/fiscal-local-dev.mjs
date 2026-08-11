@@ -59,6 +59,12 @@ app.get('/api/fiscal/nfse-xml', async (req, res) => {
   res.status(upstream.status).type(upstream.headers.get('content-type') || 'application/json').send(await upstream.text());
 });
 
+app.get('/api/fiscal/nfse-danfse-v2', async (req, res) => {
+  const accessKey = encodeURIComponent(String(req.query.accessKey || ''));
+  const upstream = await fetch(`http://127.0.0.1:3002/api/fiscal/nfse/authorized/${accessKey}/danfse-v2`, { headers: { authorization: String(req.headers.authorization || ''), 'x-internal-secret': String(process.env.FISCAL_SERVICE_INTERNAL_SECRET || ''), accept: 'application/json' } });
+  res.status(upstream.status).type(upstream.headers.get('content-type') || 'application/json').send(await upstream.text());
+});
+
 app.get('/api/fiscal/file-download', async (req, res) => {
   const token = encodeURIComponent(String(req.query.token || ''));
   const upstream = await fetch(`http://127.0.0.1:3002/api/fiscal/file-download?token=${token}`, { headers: { 'x-internal-secret': String(process.env.FISCAL_SERVICE_INTERNAL_SECRET || '') } });

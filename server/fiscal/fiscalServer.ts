@@ -17,6 +17,7 @@ import { discoverRestrictedSefinContract } from './phase2/openApiDiscovery';
 import { prepareRestrictedNfseRequest, RESTRICTED_NFSE_ENDPOINT, transmitPreparedRestrictedNfse, prepareNfseRequest, PRODUCTION_NFSE_ENDPOINT, transmitPreparedNfse } from './phase2/restrictedTransmission';
 import { downloadRestrictedDanfse, parseAuthorizedNfseXml, persistAuthorizedNfse } from './postAuthorization/authorizedNfse';
 import { consultOfficialCancellation, interpretOfficialCancellationResponse, prepareCancellationEvent, PRODUCTION_EVENTS_ENDPOINT_TEMPLATE, transmitPreparedCancellationEvent } from './cancellation/cancellationEvent';
+import { DANFSE_LAYOUT_VERSION, generateDanfseV2FromAuthorizedXml } from './danfse/danfseV2';
 
 const PORT = Number(process.env.PORT || process.env.FISCAL_PORT || 3002);
 const FIREBASE_DATABASE_ID = process.env.FIREBASE_DATABASE_ID?.trim() || 'ai-studio-deb852ec-3d57-481f-a30e-1461a2294d90';
@@ -510,6 +511,25 @@ app.get('/api/fiscal/nfse/authorized/:accessKey/xml', protect, async (req: any, 
   console.log('[Fiscal Download] XML autorizado preparado', { accessKey: accessKey.slice(-8), bytes: Buffer.byteLength(xml) });
   const fileName = `NFSe-${record.data()?.numeroNota || 'autorizada'}-${accessKey.slice(-8)}.xml`;
   res.json({ success: true, data: { fileName, mimeType: 'application/xml', downloadUrl: createFiscalDownload(Buffer.from(xml, 'utf8'), 'application/xml', fileName) } });
+} catch (error) { next(error); } });
+
+app.get('/api/fiscal/nfse/authorized/:accessKey/danfse-v2', protect, async (req: any, res, next) => { try {
+  const accessKey = String(req.params.accessKey || '');
+  if (!/^\d{50}$/.test(accessKey)) return res.status(400).json({ success: false, code: 'INVALID_NFSE_ACCESS_KEY', error: 'Chave de acesso inválida.' });
+  const record = await req.fiscal.db.collection('notas_fiscais_servico').doc(accessKey).get();
+  if (!record.exists || record.data()?.companyId !== req.fiscal.companyId) return res.status(404).json({ success: false, code: 'AUTHORIZED_NFSE_NOT_FOUND', error: 'NFS-e não encontrada.' });
+  if (!['AUTORIZADA', 'Autorizada'].includes(String(record.data()?.status || ''))) return res.status(409).json({ success: false, code: 'NFSE_NOT_AUTHORIZED', error: 'O DANFSe somente pode ser gerado para NFS-e autorizada.' });
+  const privateRoot = resolve(process.env.FISCAL_CERTIFICATE_STORAGE_PATH || './fiscal-private');
+  const storedXmlPath = String(record.data()?.xmlPath || '');
+  if (!storedXmlPath.startsWith('private://')) throw new Error('Caminho do XML autorizado não registrado.');
+  const companyRoot = resolve(privateRoot, req.fiscal.companyId);
+  const xmlPath = resolve(companyRoot, storedXmlPath.slice('private://'.length));
+  if (!xmlPath.startsWith(`${companyRoot}${sep}`)) throw new Error('Caminho fiscal privado inválido.');
+  const xml = await readFile(xmlPath, 'utf8');
+  const pdf = await generateDanfseV2FromAuthorizedXml(xml, accessKey);
+  const fileName = `DANFSe-${record.data()?.numeroNota || 'autorizada'}-${accessKey.slice(-8)}.pdf`;
+  await writeFiscalAudit(req.fiscal.db, req.fiscal.companyId, req.fiscal.decoded.uid, 'danfse_v2_generated_from_authorized_xml', { accessKeySuffix: accessKey.slice(-8), nfseNumber: record.data()?.numeroNota || null, layoutVersion: DANFSE_LAYOUT_VERSION, bytes: pdf.length });
+  res.json({ success: true, data: { fileName, mimeType: 'application/pdf', downloadUrl: createFiscalDownload(pdf, 'application/pdf', fileName), layoutVersion: DANFSE_LAYOUT_VERSION, source: 'authorized_xml', officialStandard: true } });
 } catch (error) { next(error); } });
 
 app.post('/api/fiscal/nfse/authorized/:accessKey/cancellation/prepare', protect, async (req: any, res, next) => { try {

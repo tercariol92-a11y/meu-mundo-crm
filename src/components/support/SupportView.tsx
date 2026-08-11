@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { databaseService } from '../../services/databaseService';
 import { Chamado, User, Cliente, Tecnico, Reminder } from '../../types';
 import { 
@@ -30,7 +30,7 @@ import ServiceOrder from './ServiceOrder';
 import OSPrintViewer from './OSPrintViewer';
 import SupportDashboard from './SupportDashboard';
 import WhatsAppModal from '../comercial/WhatsAppModal';
-import { format, differenceInHours } from 'date-fns';
+import { format, differenceInHours, addDays, endOfDay, endOfMonth, endOfWeek, startOfDay, startOfMonth, startOfWeek } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 interface SupportViewProps {
@@ -52,6 +52,10 @@ export default function SupportView({ user, mode = 'dashboard' }: SupportViewPro
   const [selectedContactForWhatsApp, setSelectedContactForWhatsApp] = useState<{name: string, phone: string} | null>(null);
   const [filter, setFilter] = useState<string>('todos');
   const [searchTerm, setSearchTerm] = useState('');
+  const [dateStart, setDateStart] = useState('');
+  const [dateEnd, setDateEnd] = useState('');
+  const [technicianFilter, setTechnicianFilter] = useState('todos');
+  const [onlyMine, setOnlyMine] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -86,6 +90,23 @@ export default function SupportView({ user, mode = 'dashboard' }: SupportViewPro
     fetchData();
   }, [user.id, user.role]);
 
+  const myTechnicianId = Object.values(tecnicos).find(technician => technician.usuarioId === user.id)?.id || user.id;
+  const technicianMetrics = useMemo(() => {
+    const result: Record<string, { average: number; reviews: number; tickets: number; completed: number }> = {};
+    chamados.forEach(ticket => {
+      if (!ticket.tecnicoId) return;
+      const metric = result[ticket.tecnicoId] || { average: 0, reviews: 0, tickets: 0, completed: 0 };
+      metric.tickets += 1;
+      if (ticket.status === 'concluido') metric.completed += 1;
+      if (ticket.satisfactionRating) { metric.average = ((metric.average * metric.reviews) + ticket.satisfactionRating) / (metric.reviews + 1); metric.reviews += 1; }
+      result[ticket.tecnicoId] = metric;
+    });
+    return result;
+  }, [chamados]);
+  const evaluatedCount = chamados.filter(ticket => Boolean(ticket.satisfactionRating)).length;
+  const generalAverage = evaluatedCount ? chamados.reduce((sum, ticket) => sum + (ticket.satisfactionRating || 0), 0) / evaluatedCount : 0;
+  const completedCount = chamados.filter(ticket => ticket.status === 'concluido').length;
+
   const filteredChamados = chamados.map(c => ({
     ...c,
     cliente: c.clienteId ? clients[c.clienteId] : c.cliente,
@@ -97,8 +118,21 @@ export default function SupportView({ user, mode = 'dashboard' }: SupportViewPro
     }
     const matchesSearch = c.titulo.toLowerCase().includes(searchTerm.toLowerCase()) || 
                          (c.cliente?.nomeFantasia?.toLowerCase() || '').includes(searchTerm.toLowerCase());
-    return matchesFilter && matchesSearch;
+    const referenceDate = c.dataInicioAtendimento || c.slaDeadline || c.createdAt;
+    const time = referenceDate ? new Date(referenceDate).getTime() : 0;
+    const matchesDate = (!dateStart || time >= startOfDay(new Date(`${dateStart}T00:00:00`)).getTime()) && (!dateEnd || time <= endOfDay(new Date(`${dateEnd}T00:00:00`)).getTime());
+    const effectiveTechnician = onlyMine ? myTechnicianId : technicianFilter;
+    const matchesTechnician = effectiveTechnician === 'todos' || c.tecnicoId === effectiveTechnician || (onlyMine && (c as any).tecnicoUid === user.id);
+    return matchesFilter && matchesSearch && matchesDate && matchesTechnician;
   });
+
+  const setQuickPeriod = (period: 'hoje' | 'amanha' | 'semana' | 'mes') => {
+    const now = new Date(); let start = now; let end = now;
+    if (period === 'amanha') start = end = addDays(now, 1);
+    if (period === 'semana') { start = startOfWeek(now, { weekStartsOn: 1 }); end = endOfWeek(now, { weekStartsOn: 1 }); }
+    if (period === 'mes') { start = startOfMonth(now); end = endOfMonth(now); }
+    setDateStart(format(start, 'yyyy-MM-dd')); setDateEnd(format(end, 'yyyy-MM-dd'));
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -180,6 +214,11 @@ export default function SupportView({ user, mode = 'dashboard' }: SupportViewPro
                 className="w-full bg-surface-container-high border-none rounded-2xl pl-12 pr-4 py-3 text-sm focus:ring-2 focus:ring-primary/20 transition-all"
               />
             </div>
+          </div>
+
+          <div className="rounded-[28px] border border-surface-container-high bg-surface-container p-4 space-y-3">
+            <div className="flex flex-wrap items-end gap-3"><label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Data inicial<input type="date" value={dateStart} onChange={event => setDateStart(event.target.value)} className="mt-1 block rounded-xl border border-surface-container-high bg-white px-3 py-2 text-xs"/></label><label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Data final<input type="date" value={dateEnd} onChange={event => setDateEnd(event.target.value)} className="mt-1 block rounded-xl border border-surface-container-high bg-white px-3 py-2 text-xs"/></label><div className="flex flex-wrap gap-1">{(['hoje','amanha','semana','mes'] as const).map(period => <button key={period} onClick={() => setQuickPeriod(period)} className="rounded-xl bg-surface-container-high px-3 py-2 text-[10px] font-black uppercase">{period === 'amanha' ? 'Amanhã' : period === 'semana' ? 'Esta semana' : period === 'mes' ? 'Este mês' : 'Hoje'}</button>)}</div><label className="min-w-56 flex-1 text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Técnico responsável<select value={technicianFilter} disabled={onlyMine} onChange={event => setTechnicianFilter(event.target.value)} className="mt-1 block w-full rounded-xl border border-surface-container-high bg-white px-3 py-2 text-xs"><option value="todos">Todos os técnicos</option>{Object.values(tecnicos).map(technician => <option key={technician.id} value={technician.id}>{technician.nome}</option>)}</select></label><label className="flex items-center gap-2 rounded-xl bg-primary/10 px-4 py-2 text-xs font-bold text-primary"><input type="checkbox" checked={onlyMine} onChange={event => setOnlyMine(event.target.checked)} className="accent-primary"/> Meus chamados</label></div>
+            <div className="flex flex-wrap gap-4 text-xs font-bold text-on-surface-variant"><span>{filteredChamados.length} chamados encontrados</span><span>Média da equipe: ⭐ {generalAverage.toFixed(1)}</span><span>{evaluatedCount} avaliações</span><span>{completedCount ? Math.round((evaluatedCount / completedCount) * 100) : 0}% dos concluídos avaliados</span></div>
           </div>
 
           {/* Ticket List */}
@@ -291,6 +330,7 @@ export default function SupportView({ user, mode = 'dashboard' }: SupportViewPro
                           <div className="text-right hidden sm:block">
                             <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant mb-1">Técnico Responsável</p>
                             <p className="text-sm font-black text-on-surface">{chamado.tecnico?.nome || 'Não atribuído'}</p>
+                            {!!chamado.tecnicoId && !!technicianMetrics[chamado.tecnicoId]?.reviews && <p className="mt-1 text-xs font-black text-amber-600">⭐ {technicianMetrics[chamado.tecnicoId].average.toFixed(1)}</p>}
                           </div>
                           <div className="w-12 h-12 rounded-2xl bg-surface-container-highest flex items-center justify-center text-on-surface-variant overflow-hidden border-2 border-surface-container-high">
                             {chamado.tecnico?.fotoUrl ? (

@@ -48,8 +48,10 @@ import { LanguageProvider } from './components/LanguageProvider';
 import { CompanyProvider } from './contexts/CompanyContext';
 import { GlobalDataProvider } from './contexts/GlobalDataContext';
 import { Toaster } from 'react-hot-toast';
+import SupportSatisfactionPublic from './components/support/SupportSatisfactionPublic';
 
 export default function App() {
+  if (window.location.pathname === '/avaliar-chamado') return <SupportSatisfactionPublic />;
   return (
     <ThemeProvider>
       <LanguageProvider>

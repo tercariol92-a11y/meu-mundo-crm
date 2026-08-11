@@ -18,29 +18,57 @@ async function callFiscalGet(path: string) {
   const currentUser = auth.currentUser;
   if (!currentUser) throw new Error('Faça login novamente para acessar o documento fiscal.');
   const response = await fetch(path, { headers: { Authorization: `Bearer ${await currentUser.getIdToken()}` } });
-  const result = await response.json().catch(() => null);
-  if (!response.ok || !result?.success) throw new Error(result?.error || `Falha fiscal HTTP ${response.status}.`);
+  const contentType = response.headers.get('content-type') || 'não informado';
+  const body = await response.text();
+  let result: any = null;
+  if (contentType.toLowerCase().includes('application/json')) {
+    try { result = JSON.parse(body); } catch { /* erro detalhado abaixo */ }
+  }
+  if (!result) throw new Error(`HTTP ${response.status} recebido, porém o formato do documento retornado é inválido: Content-Type ${contentType}.`);
+  if (!response.ok || !result.success) throw new Error(result.error || `Falha fiscal HTTP ${response.status}.`);
   return result.data;
 }
 
-function downloadBase64File(data: { contentBase64?: string; mimeType: string; fileName: string; downloadUrl?: string }) {
-  if (data.downloadUrl) {
-    if (!data.downloadUrl.startsWith('/api/fiscal/file-download?token=')) throw new Error('URL de download fiscal inválida.');
-    window.location.assign(data.downloadUrl);
-    return;
-  }
-  if (!data.contentBase64) throw new Error('Conteúdo do arquivo fiscal não retornado.');
-  const binary = atob(data.contentBase64); const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  const url = URL.createObjectURL(new Blob([bytes], { type: data.mimeType }));
+function triggerBlobDownload(blob: Blob, fileName: string) {
+  if (!blob.size) throw new Error('HTTP 200 recebido, porém o documento retornado está vazio.');
+  const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = data.fileName;
+  anchor.download = fileName;
   anchor.style.display = 'none';
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+async function downloadBase64File(data: { contentBase64?: string; mimeType: string; fileName: string; downloadUrl?: string }) {
+  if (data.downloadUrl) {
+    if (!data.downloadUrl.startsWith('/api/fiscal/file-download?token=')) throw new Error('URL de download fiscal inválida.');
+    const response = await fetch(data.downloadUrl);
+    const contentType = response.headers.get('content-type') || '';
+    const disposition = response.headers.get('content-disposition') || '';
+    if (!response.ok) throw new Error(`Falha ao obter o documento fiscal. HTTP ${response.status}.`);
+    if (!contentType.toLowerCase().includes(data.mimeType.toLowerCase())) throw new Error(`HTTP ${response.status} recebido, porém o formato do documento retornado é inválido: Content-Type ${contentType || 'não informado'}.`);
+    const blob = await response.blob();
+    triggerBlobDownload(blob, data.fileName);
+    return { httpStatus: response.status, contentType, contentDisposition: disposition, size: blob.size };
+  }
+  if (!data.contentBase64) throw new Error('Conteúdo do arquivo fiscal não retornado.');
+  const binary = atob(data.contentBase64); const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  const blob = new Blob([bytes], { type: data.mimeType });
+  triggerBlobDownload(blob, data.fileName);
+  return { httpStatus: 200, contentType: data.mimeType, contentDisposition: `attachment; filename="${data.fileName}"`, size: blob.size };
+}
+
+async function fetchFiscalBlob(data: { mimeType: string; fileName: string; downloadUrl?: string }) {
+  if (!data.downloadUrl?.startsWith('/api/fiscal/file-download?token=')) throw new Error('URL de download fiscal inválida.');
+  const response = await fetch(data.downloadUrl);
+  if (!response.ok) throw new Error(`Falha ao obter o arquivo fiscal. HTTP ${response.status}.`);
+  const blob = await response.blob();
+  if (blob.type && !blob.type.includes(data.mimeType)) throw new Error('O arquivo fiscal retornou um tipo incompatível.');
+  return { blob, fileName: data.fileName, mimeType: data.mimeType };
 }
 
 export const fiscalApi = {
@@ -55,6 +83,8 @@ export const fiscalApi = {
   transmitFirstRestrictedDps: (body: Record<string, unknown>) => callFiscal('/api/fiscal/phase3-transmit-first', body),
   reconcileAuthorizedNfse: (accessKey?: string) => callFiscal('/api/fiscal/nfse-reconcile', accessKey ? { accessKey } : {}),
   downloadAuthorizedXml: async (accessKey: string) => downloadBase64File(await callFiscalGet(`/api/fiscal/nfse-xml?accessKey=${encodeURIComponent(accessKey)}`)),
+  prepareDanfseV2: async (accessKey: string) => fetchFiscalBlob(await callFiscalGet(`/api/fiscal/nfse-danfse-v2?accessKey=${encodeURIComponent(accessKey)}`)),
+  downloadDanfseV2: async (accessKey: string) => downloadBase64File(await callFiscalGet(`/api/fiscal/nfse-danfse-v2?accessKey=${encodeURIComponent(accessKey)}`)),
   downloadRestrictedDanfse: async (accessKey: string, credentials: Record<string, unknown>) => downloadBase64File(await callFiscal(`/api/fiscal/nfse-danfse?accessKey=${encodeURIComponent(accessKey)}`, credentials)),
   prepareOfficialCancellation: (accessKey: string, body: Record<string, unknown>) => callFiscal('/api/fiscal/nfse-cancellation-prepare', { ...body, accessKey }),
   reconcileOfficialCancellation: (accessKey: string, body: Record<string, unknown>) => callFiscal('/api/fiscal/nfse-cancellation-reconcile', { ...body, accessKey }),
