@@ -64,8 +64,14 @@ async function protect(req: any, res: any, next: any) {
     if (!authorization.startsWith('Bearer ')) return res.status(401).json({ success: false, code: 'FIREBASE_TOKEN_REQUIRED', error: 'Token Firebase obrigatório.' });
     const firebaseApp = adminApp(); const decoded = await getAuth(firebaseApp).verifyIdToken(authorization.slice(7).trim()); const db = getFirestore(firebaseApp, FIREBASE_DATABASE_ID);
     const user = (await db.collection('usuarios').doc(decoded.uid).get()).data() || {};
-    const role = String(user.role || decoded.role || '');
-    if (role !== 'admin') return res.status(403).json({ success: false, code: 'ADMIN_REQUIRED', error: 'Perfil administrativo obrigatório.' });
+    const roles = new Set([
+      String(user.role || ''),
+      ...((Array.isArray(user.roles) ? user.roles : []).map((role: unknown) => String(role))),
+      String(decoded.role || ''),
+    ].filter(Boolean));
+    if (!roles.has('admin') && !roles.has('financeiro')) {
+      return res.status(403).json({ success: false, code: 'FISCAL_ACCESS_REQUIRED', error: 'Permissão fiscal administrativa ou financeira obrigatória.' });
+    }
     const companyId = String(user.companyId || user.tenantId || user.empresaId || decoded.companyId || '');
     if (!companyId || !/^[A-Za-z0-9_-]{2,128}$/.test(companyId)) return res.status(403).json({ success: false, code: 'COMPANY_REQUIRED', error: 'Empresa fiscal inválida.' });
     req.fiscal = { decoded, db, companyId }; next();
