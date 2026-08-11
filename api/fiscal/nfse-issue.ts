@@ -1,6 +1,5 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { proxyFiscal } from './_shared.js';
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: any, res: any) {
   return proxyFiscal(req, res, '/api/fiscal/nfse/issue-restricted');
 }
