@@ -71,8 +71,9 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
   const [saveWithFinancialDoc, setSaveWithFinancialDoc] = useState(true);
 
   // Verification helper for permissions
-  const isAdmin = user?.role === 'admin';
-  const isFinanceiro = user?.role === 'financeiro' || user?.permissions?.viewFinanceiro;
+  const userRoles = new Set([user?.role, ...(user?.roles || [])].filter(Boolean));
+  const isAdmin = userRoles.has('admin');
+  const isFinanceiro = userRoles.has('financeiro') || user?.permissions?.viewFinanceiro;
   
   // Custom permissions for fiscal actions
   const canEmit = isAdmin || isFinanceiro;
