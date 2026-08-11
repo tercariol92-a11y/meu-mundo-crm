@@ -33,6 +33,7 @@ import OSPrintViewer from './OSPrintViewer';
 import ServiceOrderPhotoGallery from './ServiceOrderPhotoGallery';
 import { serviceOrderPhotosService } from '../../services/serviceOrderPhotosService';
 import { serviceOrderSignatureService } from '../../services/serviceOrderSignatureService';
+import { notifyAssignedTechnician } from '../../services/supportTicketNotifications';
 
 interface ServiceOrderProps {
   chamadoId: string;
@@ -59,6 +60,7 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [signatureStatus, setSignatureStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [sendSatisfactionSurvey, setSendSatisfactionSurvey] = useState(true);
+  const [retryingTechnicianNotification, setRetryingTechnicianNotification] = useState(false);
   const sigPad = useRef<SignatureCanvas>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   
@@ -91,6 +93,23 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
     };
     fetchChamado();
   }, [chamadoId]);
+
+  const handleRetryTechnicianNotification = async () => {
+    if (!chamado || retryingTechnicianNotification) return;
+    setRetryingTechnicianNotification(true);
+    setError(null);
+    try {
+      const result = await notifyAssignedTechnician(chamado);
+      if (!result.success) throw new Error(result.reason || result.error || 'Não foi possível enviar a notificação ao técnico.');
+      const updated = await databaseService.getChamadoById(chamado.id);
+      if (updated) setChamado(updated);
+      onUpdate();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível enviar a notificação ao técnico.');
+    } finally {
+      setRetryingTechnicianNotification(false);
+    }
+  };
 
   const handleStart = async () => {
     if (!chamado) return;
@@ -616,6 +635,17 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
                 <div className="flex items-center justify-between gap-3"><span className="font-black uppercase tracking-wider">{entry.type === 'whatsapp_tecnico' ? 'WhatsApp técnico' : 'Pesquisa de satisfação'}</span><span className={entry.status === 'sent' ? 'font-bold text-emerald-700' : 'font-bold text-red-700'}>{entry.status === 'sent' ? 'Enviado' : 'Erro'}</span></div>
                 <p className="mt-1 text-on-surface-variant">{new Date(entry.createdAt).toLocaleString('pt-BR')}{entry.destinationMasked ? ` · ${entry.destinationMasked}` : ''}</p>
                 {entry.error && <p className="mt-1 text-red-700">{entry.error}</p>}
+                {entry.type === 'whatsapp_tecnico' && entry.status === 'error' && chamado.status !== 'concluido' && (
+                  <button
+                    type="button"
+                    onClick={handleRetryTechnicianNotification}
+                    disabled={retryingTechnicianNotification}
+                    className="mt-2 inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-3 py-2 font-black uppercase tracking-wider text-white disabled:opacity-60"
+                  >
+                    {retryingTechnicianNotification ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                    Reenviar ao técnico
+                  </button>
+                )}
               </div>)}
             </div>
           </div>}
