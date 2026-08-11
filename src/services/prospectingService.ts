@@ -27,6 +27,76 @@ function safeDocumentId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function normalizeCompanyText(value: unknown): string {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function normalizeCompanyPhone(value: unknown): string {
+  const digits = String(value || '').replace(/\D/g, '');
+  return digits.length > 11 && digits.startsWith('55') ? digits.slice(2) : digits;
+}
+
+function normalizeCompanyWebsite(value: unknown): string {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  try {
+    return new URL(raw.startsWith('http') ? raw : `https://${raw}`).hostname.replace(/^www\./, '');
+  } catch {
+    return raw.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+  }
+}
+
+function prospectCity(result: ProspectResult): string {
+  return result.endereco?.split(' - ')[1]?.split(',')[0]?.trim() || '';
+}
+
+type ExistingCompanyIdentity = {
+  placeId: string;
+  name: string;
+  city: string;
+  phone: string;
+  whatsapp: string;
+  cnpj: string;
+  website: string;
+};
+
+function companyIdentity(data: any): ExistingCompanyIdentity {
+  return {
+    placeId: safeDocumentId(data.sourcePlaceId || data.googlePlaceId || data.placeId),
+    name: normalizeCompanyText(data.empresa || data.nomeFantasia || data.razaoSocial || data.nome),
+    city: normalizeCompanyText(data.cidade),
+    phone: normalizeCompanyPhone(data.telefone || data.telefoneFixo),
+    whatsapp: normalizeCompanyPhone(data.whatsapp || data.celularWhatsapp),
+    cnpj: String(data.cnpj || data.cpfCnpj || '').replace(/\D/g, ''),
+    website: normalizeCompanyWebsite(data.site || data.website),
+  };
+}
+
+function resultIdentity(result: ProspectResult): ExistingCompanyIdentity {
+  return {
+    placeId: safeDocumentId(result.id),
+    name: normalizeCompanyText(result.nome),
+    city: normalizeCompanyText(prospectCity(result)),
+    phone: normalizeCompanyPhone(result.telefone),
+    whatsapp: normalizeCompanyPhone(result.whatsapp),
+    cnpj: String(result.cnpj || '').replace(/\D/g, ''),
+    website: normalizeCompanyWebsite(result.site),
+  };
+}
+
+function identitiesMatch(candidate: ExistingCompanyIdentity, existing: ExistingCompanyIdentity): boolean {
+  if (candidate.placeId && existing.placeId && candidate.placeId === existing.placeId) return true;
+  if (candidate.cnpj && existing.cnpj && candidate.cnpj === existing.cnpj) return true;
+  if (candidate.phone && (candidate.phone === existing.phone || candidate.phone === existing.whatsapp)) return true;
+  if (candidate.whatsapp && (candidate.whatsapp === existing.phone || candidate.whatsapp === existing.whatsapp)) return true;
+  if (candidate.website && existing.website && candidate.website === existing.website) return true;
+  return Boolean(candidate.name && candidate.city && candidate.name === existing.name && candidate.city === existing.city);
+}
+
 export interface ProspectResult {
   id: string;
   nome: string;
@@ -147,6 +217,30 @@ export const prospectingService = {
     }
   },
 
+  async removeExistingCompanies(results: ProspectResult[]): Promise<{ results: ProspectResult[]; skippedCount: number }> {
+    if (!results.length) return { results: [], skippedCount: 0 };
+    const [prospectionSnapshot, crmLeadsSnapshot, clientsSnapshot] = await Promise.all([
+      getDocs(collection(db, 'prospectionLeads')),
+      getDocs(collection(db, 'leads')),
+      getDocs(collection(db, 'clientes')),
+    ]);
+    const existing = [prospectionSnapshot, crmLeadsSnapshot, clientsSnapshot]
+      .flatMap(snapshot => snapshot.docs.map(item => companyIdentity(item.data())));
+    const accepted: ProspectResult[] = [];
+    const acceptedIdentities: ExistingCompanyIdentity[] = [];
+    let skippedCount = 0;
+    for (const result of results) {
+      const identity = resultIdentity(result);
+      if (existing.some(item => identitiesMatch(identity, item)) || acceptedIdentities.some(item => identitiesMatch(identity, item))) {
+        skippedCount += 1;
+        continue;
+      }
+      accepted.push(result);
+      acceptedIdentities.push(identity);
+    }
+    return { results: accepted, skippedCount };
+  },
+
   /**
    * Imports high-fidelity search Results to CRM prospectionLeads collection
    * and triggers active automations if configured.
@@ -156,19 +250,15 @@ export const prospectingService = {
     responsibleId: string
   ): Promise<{ importedIdList: string[], skippedCount: number }> {
     try {
-      // 1. Fetch existing leads to check for duplicates under prospectionLeads
-      const leadsSnap = await getDocs(collection(db, 'prospectionLeads'));
-      const existingLeads = leadsSnap.docs.map(d => {
-        const data = d.data();
-        return {
-          nome: (data.nome || '').toLowerCase().trim(),
-          cidade: (data.cidade || '').toLowerCase().trim(),
-          telefone: (data.telefone || '').replace(/\D/g, ''),
-          whatsapp: (data.whatsapp || '').replace(/\D/g, ''),
-          cnpj: (data.cnpj || '').replace(/\D/g, '').trim(),
-          site: (data.site || '').toLowerCase().trim(),
-        };
-      });
+      // Revalidate against every official CRM source at import time. This protects
+      // against stale search screens and concurrent imports from another user.
+      const [prospectionSnapshot, crmLeadsSnapshot, clientsSnapshot] = await Promise.all([
+        getDocs(collection(db, 'prospectionLeads')),
+        getDocs(collection(db, 'leads')),
+        getDocs(collection(db, 'clientes')),
+      ]);
+      const existingCompanies = [prospectionSnapshot, crmLeadsSnapshot, clientsSnapshot]
+        .flatMap(snapshot => snapshot.docs.map(item => companyIdentity(item.data())));
 
       const importedIdList: string[] = [];
       let skippedCount = 0;
@@ -178,22 +268,8 @@ export const prospectingService = {
       const activeAutomation = automations.find(a => a.ativa);
 
       for (const p of places) {
-        const cleanPhone = (p.telefone || '').replace(/\D/g, '');
-        const cleanWhatsapp = (p.whatsapp || '').replace(/\D/g, '');
-        const nameLower = (p.nome || '').toLowerCase().trim();
-        const cityLower = (p.endereco?.split(' - ')[1]?.split(',')[0] || '').toLowerCase().trim();
-        const siteLower = (p.site || '').toLowerCase().trim();
-        const cnpjClean = (p.cnpj || '').replace(/\D/g, '').trim();
-
-        // Avoid duplication by phone, CNPJ, website or name + city
-        const isDuplicate = existingLeads.some(l => {
-          if (cleanPhone && (l.telefone === cleanPhone || l.whatsapp === cleanPhone)) return true;
-          if (cleanWhatsapp && (l.telefone === cleanWhatsapp || l.whatsapp === cleanWhatsapp)) return true;
-          if (siteLower && l.site && l.site === siteLower) return true;
-          if (cnpjClean && l.cnpj && l.cnpj === cnpjClean) return true;
-          if (l.nome === nameLower && l.cidade === cityLower) return true;
-          return false;
-        });
+        const identity = resultIdentity(p);
+        const isDuplicate = existingCompanies.some(item => identitiesMatch(identity, item));
 
         if (isDuplicate) {
           skippedCount++;
@@ -206,7 +282,7 @@ export const prospectingService = {
           empresa: p.nome || 'Empresa sem nome',
           telefone: p.telefone || 'Telefone não encontrado',
           whatsapp: p.whatsapp || '',
-          cidade: p.endereco?.split(' - ')[1]?.split(',')[0]?.trim() || cityLower || '',
+          cidade: prospectCity(p),
           estado: 'SP', // Default
           origem: 'Prospecção - Google Maps',
           interesse: `Automação Comercial: ${p.categoria || 'Geral'}`,
@@ -217,9 +293,16 @@ export const prospectingService = {
 
         const docRef = await addDoc(collection(db, 'prospectionLeads'), {
           ...leadObj,
+          cnpj: p.cnpj || '',
+          site: p.site || '',
+          sourcePlaceId: p.id || '',
+          googleMapsUrl: p.linkMaps || '',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         });
+
+        // Include the newly imported company in this same batch's duplicate index.
+        existingCompanies.push(identity);
 
         const newLeadId = docRef.id;
         importedIdList.push(newLeadId);

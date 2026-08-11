@@ -61,6 +61,7 @@ export default function ProspectingModule({ user, initialTab = 'buscar', onViewC
   const [apiWaitingConfig, setApiWaitingConfig] = useState(false);
   const [nextPageToken, setNextPageToken] = useState('');
   const [searchingMore, setSearchingMore] = useState(false);
+  const [duplicateSearchResultsHidden, setDuplicateSearchResultsHidden] = useState(0);
 
   // Leads Capturados Screen State
   const [prospectLeads, setProspectLeads] = useState<Lead[]>([]);
@@ -205,20 +206,23 @@ export default function ProspectingModule({ user, initialTab = 'buscar', onViewC
       setApiWaitingConfig(false);
       setSelectedResultIds([]);
       setNextPageToken('');
+      setDuplicateSearchResultsHidden(0);
       toast.loading('Iniciando varredura no Google Maps...', { id: 'search-toast' });
       
       const { results, nextPageToken: token } = await prospectingService.searchGoogleMaps(segment, city);
-      setSearchResults(results);
+      const filtered = await prospectingService.removeExistingCompanies(results);
+      setSearchResults(filtered.results);
+      setDuplicateSearchResultsHidden(filtered.skippedCount);
       setNextPageToken(token || '');
       setSearchSource('google-places-api');
       
       await prospectingService.createLog(
         'Busca Realizada', 
-        `Busca por "${segment}" em "${city}". ${results.length} resultados encontrados.`, 
+        `Busca por "${segment}" em "${city}". ${filtered.results.length} empresas novas e ${filtered.skippedCount} já cadastradas ocultadas.`,
         'info'
       );
       
-      toast.success(`${results.length} empresas encontradas!`, { id: 'search-toast' });
+      toast.success(`${filtered.results.length} empresas novas encontradas${filtered.skippedCount ? `; ${filtered.skippedCount} já cadastradas foram ocultadas` : ''}.`, { id: 'search-toast' });
     } catch (e: any) {
       setSearchResults([]);
       setNextPageToken('');
@@ -237,15 +241,15 @@ export default function ProspectingModule({ user, initialTab = 'buscar', onViewC
       toast.loading('Carregando mais resultados...', { id: 'load-more-toast' });
 
       const { results, nextPageToken: token } = await prospectingService.searchGoogleMaps(segment, city, nextPageToken);
-      
-      setSearchResults(prevResults => {
-        const existingIds = new Set(prevResults.map(r => r.id));
-        const newUniqueResults = results.filter(r => !existingIds.has(r.id));
-        return [...prevResults, ...newUniqueResults];
-      });
+      const filtered = await prospectingService.removeExistingCompanies([...searchResults, ...results]);
+      const previousIds = new Set(searchResults.map(result => result.id));
+      const newCount = filtered.results.filter(result => !previousIds.has(result.id)).length;
+      setSearchResults(filtered.results);
+      setSelectedResultIds(current => current.filter(id => filtered.results.some(result => result.id === id)));
+      setDuplicateSearchResultsHidden(filtered.skippedCount);
       setNextPageToken(token || '');
 
-      toast.success(`${results.length} novas empresas adicionadas!`, { id: 'load-more-toast' });
+      toast.success(`${newCount} novas empresas adicionadas${filtered.skippedCount ? `; ${filtered.skippedCount} já cadastradas foram ocultadas` : ''}.`, { id: 'load-more-toast' });
     } catch (e: any) {
       toast.error(e.message || 'Erro ao carregar mais empresas.', { id: 'load-more-toast' });
     } finally {
@@ -818,6 +822,11 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
                   <div className="flex items-center gap-2 text-xs font-extrabold text-on-surface uppercase tracking-wider">
                     <CheckCircle size={15} className="text-emerald-500" />
                     <span>Resultados da Pesquisa ({searchResults.length})</span>
+                    {duplicateSearchResultsHidden > 0 && (
+                      <span className="text-[9px] bg-amber-500/10 text-amber-600 font-bold px-2 py-0.5 rounded-full uppercase tracking-tighter ml-2">
+                        {duplicateSearchResultsHidden} já cadastrada(s) ocultada(s)
+                      </span>
+                    )}
                     <span className="text-[9px] bg-primary/10 text-primary font-bold px-2 py-0.5 rounded-full uppercase tracking-tighter ml-2">
                       Fonte: {searchSource === 'google-places-api' ? 'Places API REAL' : 'Simulador Prospecção'}
                     </span>
@@ -957,8 +966,14 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
             ) : (
               <div className="flex flex-col items-center justify-center p-12 border-2 border-dashed border-surface-container-high rounded-2xl bg-surface-container-low text-center">
                 <Compass size={40} className="text-on-surface-variant opacity-30 shrink-0 mb-4 animate-spin-slow" />
-                <h3 className="font-bold text-on-surface uppercase tracking-wider text-sm mb-1">Nenhum resultado para exibir</h3>
-                <p className="text-xs text-on-surface-variant max-w-sm">Preencha os filtros acima e clique em "Pesquisar Empresas" para captar registros diretamente do mapa Google Places.</p>
+                <h3 className="font-bold text-on-surface uppercase tracking-wider text-sm mb-1">
+                  {duplicateSearchResultsHidden > 0 ? 'Nenhuma empresa nova encontrada' : 'Nenhum resultado para exibir'}
+                </h3>
+                <p className="text-xs text-on-surface-variant max-w-sm">
+                  {duplicateSearchResultsHidden > 0
+                    ? `${duplicateSearchResultsHidden} resultado(s) já existiam no CRM e foram ocultados para evitar leads repetidos.`
+                    : 'Preencha os filtros acima e clique em "Pesquisar Empresas" para captar registros diretamente do mapa Google Places.'}
+                </p>
               </div>
             )}
           </div>
