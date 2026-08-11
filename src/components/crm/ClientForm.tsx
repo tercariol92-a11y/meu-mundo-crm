@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { 
   X, Save, Building2, User, MapPin, Briefcase, 
   Construction, Laptop, CreditCard, FileText,
-  CheckCircle2, AlertCircle, Plus, Trash2, History, Loader2, Repeat, Clock, Settings
+  CheckCircle2, AlertCircle, Plus, Trash2, History, Loader2, Repeat, Clock, Settings, MessageCircle
 } from 'lucide-react';
-import { Cliente, EquipamentoCliente, Chamado, SLAConfig, CustomerPortalUser } from '../../types';
+import { Cliente, ClienteContato, EquipamentoCliente, Chamado, SLAConfig, CustomerPortalUser } from '../../types';
 import { databaseService } from '../../services/databaseService';
+import { CLIENT_CONTACT_DEPARTMENTS, clientContactsService, legacyPrimaryContact } from '../../services/clientContactsService';
 import { useCompanyConfig } from '../../hooks/useCompanyConfig';
 import { motion, AnimatePresence } from 'framer-motion';
 import { PortalAccessTab } from './PortalAccessTab';
@@ -15,16 +16,23 @@ interface ClientFormProps {
   onSave: (data: Partial<Cliente>) => Promise<any>;
   onClose: () => void;
   userId: string;
+  onOpenWhatsApp?: (contact: ClienteContato) => void;
 }
 
 type TabType = 'empresa' | 'contato' | 'endereco' | 'comercial' | 'sla' | 'acesso' | 'tecnico' | 'software' | 'atendimentos' | 'financeiro' | 'obs';
 
-export default function ClientForm({ cliente, onSave, onClose, userId }: ClientFormProps) {
+export default function ClientForm({ cliente, onSave, onClose, userId, onOpenWhatsApp }: ClientFormProps) {
   const { companyConfig } = useCompanyConfig();
   const [activeTab, setActiveTab] = useState<TabType>('empresa');
   const [loading, setLoading] = useState(false);
   const [equipamentos, setEquipamentos] = useState<Partial<EquipamentoCliente>[]>([]);
   const [chamados, setChamados] = useState<Chamado[]>([]);
+  const initialContact = cliente ? legacyPrimaryContact(cliente) : null;
+  const [contatos, setContatos] = useState<ClienteContato[]>(initialContact ? [initialContact] : [{
+    id: 'new-primary', clienteId: '', nome: '', isPrimary: true, recebeWhatsapp: true,
+    recebeOrcamento: true, recebeChamados: true,
+  }]);
+  const [removedContactIds, setRemovedContactIds] = useState<string[]>([]);
   const [formData, setFormData] = useState<Partial<Cliente>>(() => {
     const base = {
       nomeFantasia: '',
@@ -76,12 +84,14 @@ export default function ClientForm({ cliente, onSave, onClose, userId }: ClientF
   const fetchData = async () => {
     if (!cliente?.id) return;
     try {
-      const [equipsData, chamadosData] = await Promise.all([
+      const [equipsData, chamadosData, contatosData] = await Promise.all([
         databaseService.getEquipamentosCliente(cliente.id),
-        databaseService.getChamados(cliente.id)
+        databaseService.getChamados(cliente.id),
+        clientContactsService.list(cliente),
       ]);
       setEquipamentos(equipsData || []);
       setChamados(chamadosData || []);
+      if (contatosData.length) setContatos(contatosData);
     } catch (error) {
       console.error('Error fetching client data:', error);
     }
@@ -99,11 +109,16 @@ export default function ClientForm({ cliente, onSave, onClose, userId }: ClientF
       newErrors.cnpj = 'CNPJ / CPF é obrigatório';
       if (!firstErrorTab) firstErrorTab = 'empresa';
     }
-    if (!formData.responsavelNome?.trim()) {
+    const primaryContact = contatos.find(contact => contact.isPrimary) || contatos[0];
+    if (contatos.some(contact => !contact.nome?.trim())) {
+      newErrors.contatos = 'O nome é obrigatório em todos os contatos';
+      if (!firstErrorTab) firstErrorTab = 'contato';
+    }
+    if (!primaryContact?.nome?.trim()) {
       newErrors.responsavelNome = 'Nome do contato é obrigatório';
       if (!firstErrorTab) firstErrorTab = 'contato';
     }
-    if (!formData.celularWhatsapp?.trim() && !formData.telefoneFixo?.trim()) {
+    if (!primaryContact?.celularWhatsapp?.trim() && !primaryContact?.telefone?.trim()) {
       newErrors.telefoneFixo = 'Pelo menos um telefone é obrigatório';
       newErrors.celularWhatsapp = 'Pelo menos um telefone é obrigatório';
       if (!firstErrorTab) firstErrorTab = 'contato';
@@ -129,8 +144,14 @@ export default function ClientForm({ cliente, onSave, onClose, userId }: ClientF
 
     setLoading(true);
     try {
+      const primaryContact = contatos.find(contact => contact.isPrimary) || contatos[0];
       const dataToSave = {
         ...formData,
+        responsavelNome: primaryContact.nome,
+        responsavelCargo: primaryContact.cargo || '',
+        telefoneFixo: primaryContact.telefone || '',
+        celularWhatsapp: primaryContact.celularWhatsapp || '',
+        emailPrincipal: primaryContact.email || '',
         usuarioId: formData.usuarioId || userId
       };
       
@@ -140,6 +161,8 @@ export default function ClientForm({ cliente, onSave, onClose, userId }: ClientF
       if (!savedCliente) {
         throw new Error('Não foi possível obter os dados do cliente salvo.');
       }
+
+      await clientContactsService.saveAll(savedCliente.id, contatos, removedContactIds);
 
       // Save equipments if any
       if (savedCliente.id && equipamentos.length > 0) {
@@ -199,6 +222,26 @@ export default function ClientForm({ cliente, onSave, onClose, userId }: ClientF
       
       return newErrs;
     });
+  };
+
+  const updateContact = (id: string, field: keyof ClienteContato, value: any) => {
+    setContatos(current => current.map(contact => contact.id === id ? { ...contact, [field]: value } : contact));
+    setSubmitError(null);
+  };
+
+  const markPrimary = (id: string) => setContatos(current => current.map(contact => ({ ...contact, isPrimary: contact.id === id })));
+  const addContact = () => setContatos(current => [...current, {
+    id: `new-${crypto.randomUUID()}`, clienteId: cliente?.id || '', nome: '', isPrimary: false,
+    recebeWhatsapp: false, recebeCobranca: false, recebeBoleto: false, recebeNotaFiscal: false,
+    recebeOrcamento: false, recebeChamados: false, contatoTecnico: false,
+  }]);
+  const removeContact = (id: string) => {
+    if (contatos.length === 1) return setSubmitError('O cliente precisa possuir pelo menos um contato.');
+    const removed = contatos.find(contact => contact.id === id);
+    const remaining = contatos.filter(contact => contact.id !== id);
+    if (removed?.isPrimary && remaining.length) remaining[0] = { ...remaining[0], isPrimary: true };
+    if (id !== 'legacy-primary' && !id.startsWith('new-')) setRemovedContactIds(current => [...current, id]);
+    setContatos(remaining);
   };
 
   const handleSLAChange = (field: keyof SLAConfig, value: any) => {
@@ -413,62 +456,50 @@ export default function ClientForm({ cliente, onSave, onClose, userId }: ClientF
                   )}
 
                   {activeTab === 'contato' && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="md:col-span-2">
-                        <h3 className={sectionTitleClass}><User size={18} /> Contato Principal</h3>
+                    <div className="space-y-6">
+                      <div className="flex items-center justify-between gap-4">
+                        <h3 className={sectionTitleClass}><User size={18} /> Contatos da empresa</h3>
+                        <button type="button" onClick={addContact} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-white text-[10px] font-black uppercase tracking-widest">
+                          <Plus size={15} /> Adicionar contato
+                        </button>
                       </div>
-                      <div>
-                        <label className={labelClass}>Nome do Responsável *</label>
-                        <input 
-                          type="text" 
-                          className={`${inputClass} ${errors.responsavelNome ? 'border-error ring-1 ring-error/20' : ''}`}
-                          value={formData.responsavelNome || ''} 
-                          onChange={e => handleChange('responsavelNome', e.target.value)} 
-                        />
-                        {errors.responsavelNome && <p className="text-[10px] text-error mt-1 font-bold">{errors.responsavelNome}</p>}
-                      </div>
-                      <div>
-                        <label className={labelClass}>Cargo</label>
-                        <input type="text" className={inputClass} value={formData.responsavelCargo || ''} onChange={e => handleChange('responsavelCargo', e.target.value)} />
-                      </div>
-                      <div>
-                        <label className={labelClass}>Telefone Fixo</label>
-                        <input 
-                          type="text" 
-                          className={`${inputClass} ${errors.telefoneFixo ? 'border-error ring-1 ring-error/20' : ''}`}
-                          value={formData.telefoneFixo || ''} 
-                          onChange={e => handleChange('telefoneFixo', e.target.value)} 
-                          placeholder="(00) 0000-0000" 
-                        />
-                        {errors.telefoneFixo && <p className="text-[10px] text-error mt-1 font-bold">{errors.telefoneFixo}</p>}
-                      </div>
-                      <div>
-                        <label className={labelClass}>Celular / WhatsApp *</label>
-                        <input 
-                          type="text" 
-                          className={`${inputClass} ${errors.celularWhatsapp ? 'border-error ring-1 ring-error/20' : ''}`}
-                          value={formData.celularWhatsapp || ''} 
-                          onChange={e => handleChange('celularWhatsapp', e.target.value)} 
-                          placeholder="(00) 00000-0000" 
-                        />
-                        {errors.celularWhatsapp && <p className="text-[10px] text-error mt-1 font-bold">{errors.celularWhatsapp}</p>}
-                      </div>
-                      <div className="md:col-span-2">
-                        <label className={labelClass}>E-mail Principal</label>
-                        <input type="text" className={inputClass} value={formData.emailPrincipal || ''} onChange={e => handleChange('emailPrincipal', e.target.value)} placeholder="exemplo@empresa.com.br" />
-                      </div>
-                      <div className="md:col-span-2">
-                        <label className={labelClass}>Site / Website</label>
-                        <input type="text" className={inputClass} value={formData.website || ''} onChange={e => handleChange('website', e.target.value)} placeholder="www.cliente.com.br" />
-                      </div>
-                      <div>
-                        <label className={labelClass}>E-mail Financeiro</label>
-                        <input type="text" className={inputClass} value={formData.emailFinanceiro || ''} onChange={e => handleChange('emailFinanceiro', e.target.value)} />
-                      </div>
-                      <div>
-                        <label className={labelClass}>E-mail Técnico</label>
-                        <input type="text" className={inputClass} value={formData.emailTecnico || ''} onChange={e => handleChange('emailTecnico', e.target.value)} />
-                      </div>
+                      {contatos.map((contact, index) => (
+                        <div key={contact.id} className={`p-5 rounded-2xl border space-y-4 ${contact.isPrimary ? 'border-primary bg-primary/5' : 'border-surface-container-high bg-surface-container-low'}`}>
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-xs font-black uppercase">{contact.nome || `Contato ${index + 1}`}</p>
+                              <p className="text-[10px] text-on-surface-variant">{contact.departamentoOutro || contact.departamento || 'Departamento não informado'}{contact.isPrimary ? ' · Principal' : ''}</p>
+                            </div>
+                            <div className="flex gap-2">
+                              {contact.celularWhatsapp && onOpenWhatsApp && <button type="button" onClick={() => onOpenWhatsApp(contact)} className="p-2 rounded-lg bg-green-100 text-green-700" title="Enviar WhatsApp"><MessageCircle size={16} /></button>}
+                              <button type="button" onClick={() => removeContact(contact.id)} className="p-2 rounded-lg bg-red-50 text-red-600" title="Excluir contato"><Trash2 size={16} /></button>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div><label className={labelClass}>Nome *</label><input className={inputClass} value={contact.nome} onChange={e => updateContact(contact.id, 'nome', e.target.value)} /></div>
+                            <div><label className={labelClass}>Cargo</label><input className={inputClass} value={contact.cargo || ''} onChange={e => updateContact(contact.id, 'cargo', e.target.value)} /></div>
+                            <div><label className={labelClass}>Departamento</label><select className={inputClass} value={contact.departamento || ''} onChange={e => updateContact(contact.id, 'departamento', e.target.value)}><option value="">Selecione</option>{CLIENT_CONTACT_DEPARTMENTS.map(item => <option key={item} value={item}>{item}</option>)}</select></div>
+                            {contact.departamento === 'Outro' && <div><label className={labelClass}>Outro departamento</label><input className={inputClass} value={contact.departamentoOutro || ''} onChange={e => updateContact(contact.id, 'departamentoOutro', e.target.value)} /></div>}
+                            <div><label className={labelClass}>Telefone</label><input className={inputClass} value={contact.telefone || ''} onChange={e => updateContact(contact.id, 'telefone', e.target.value)} /></div>
+                            <div><label className={labelClass}>Celular / WhatsApp</label><input className={inputClass} value={contact.celularWhatsapp || ''} onChange={e => updateContact(contact.id, 'celularWhatsapp', e.target.value)} /></div>
+                            <div><label className={labelClass}>E-mail</label><input type="email" className={inputClass} value={contact.email || ''} onChange={e => updateContact(contact.id, 'email', e.target.value)} /></div>
+                            <div><label className={labelClass}>Ramal</label><input className={inputClass} value={contact.ramal || ''} onChange={e => updateContact(contact.id, 'ramal', e.target.value)} /></div>
+                            <div className="md:col-span-2"><label className={labelClass}>Observações</label><input className={inputClass} value={contact.observacoes || ''} onChange={e => updateContact(contact.id, 'observacoes', e.target.value)} /></div>
+                          </div>
+                          <div className="flex flex-wrap gap-3">
+                            {([
+                              ['isPrimary', 'Contato principal'], ['recebeWhatsapp', 'Recebe WhatsApp'], ['recebeCobranca', 'Recebe cobrança'],
+                              ['recebeBoleto', 'Recebe boleto'], ['recebeNotaFiscal', 'Recebe nota fiscal'], ['recebeOrcamento', 'Recebe orçamento'],
+                              ['recebeChamados', 'Recebe chamados'], ['contatoTecnico', 'Contato técnico'],
+                            ] as Array<[keyof ClienteContato, string]>).map(([field, label]) => (
+                              <label key={field} className="flex items-center gap-2 text-[10px] font-bold"><input type="checkbox" checked={Boolean(contact[field])} onChange={e => field === 'isPrimary' ? markPrimary(contact.id) : updateContact(contact.id, field, e.target.checked)} /> {label}</label>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                      {errors.contatos && <p className="text-xs text-error font-bold">{errors.contatos}</p>}
+                      {(errors.responsavelNome || errors.telefoneFixo) && <p className="text-xs text-error font-bold">Preencha o nome e pelo menos um telefone do contato principal.</p>}
+                      <div><label className={labelClass}>Site / Website</label><input type="text" className={inputClass} value={formData.website || ''} onChange={e => handleChange('website', e.target.value)} placeholder="www.cliente.com.br" /></div>
                     </div>
                   )}
 
@@ -1122,4 +1153,3 @@ export default function ClientForm({ cliente, onSave, onClose, userId }: ClientF
     </div>
   );
 }
-

@@ -97,6 +97,11 @@ service cloud.firestore {
     match /clientes/{clienteId} {
       allow read: if isInternal() || (isCustomer() && getCustomerClienteId() == clienteId);
       allow write: if isInternal();
+
+      match /contatos/{contatoId} {
+        allow read: if isInternal() || (isCustomer() && getCustomerClienteId() == clienteId);
+        allow write: if isInternal();
+      }
     }
 
     // Unidades rules

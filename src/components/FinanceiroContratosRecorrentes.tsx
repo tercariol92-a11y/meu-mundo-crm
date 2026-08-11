@@ -6,7 +6,8 @@ import {
   Building2, Percent, Users, AlertTriangle, FileCheck, X
 } from 'lucide-react';
 import { databaseService } from '../services/databaseService';
-import { Cliente, ConfiguracaoFiscal, ContratoRecorrente, Unidade, Usuario, NotaFiscalServico, BoletoBancario, ContratoItem, FaturamentoRecorrente } from '../types';
+import { Cliente, ClienteContato, ConfiguracaoFiscal, ContratoRecorrente, Unidade, Usuario, NotaFiscalServico, BoletoBancario, ContratoItem, FaturamentoRecorrente } from '../types';
+import { clientContactsService } from '../services/clientContactsService';
 import { listRecurringBillings } from '../services/recurringBillingService';
 import RecurringBillingQueue from './fiscal/RecurringBillingQueue';
 import { fiscalA1SessionRef } from '../services/nfseIssuanceService';
@@ -26,6 +27,7 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
   const [contratos, setContratos] = useState<ContratoRecorrente[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [unidades, setUnidades] = useState<Unidade[]>([]);
+  const [contatosFinanceiros, setContatosFinanceiros] = useState<ClienteContato[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [billingHistory, setBillingHistory] = useState<FaturamentoRecorrente[]>([]);
@@ -44,6 +46,10 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
   const [form, setForm] = useState({
     clienteId: '',
     clienteNome: '',
+    contatoFinanceiroId: '',
+    contatoFinanceiroNome: '',
+    contatoFinanceiroEmail: '',
+    contatoFinanceiroTelefone: '',
     unidadeId: '',
     unidadeNome: '',
     numeroContrato: '',
@@ -154,8 +160,18 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
       setForm(prev => ({
         ...prev,
         clienteId: cid,
-        clienteNome: target.razaoSocial || target.nomeFantasia || ''
+        clienteNome: target.razaoSocial || target.nomeFantasia || '',
+        contatoFinanceiroId: '', contatoFinanceiroNome: '', contatoFinanceiroEmail: '', contatoFinanceiroTelefone: '',
       }));
+      void clientContactsService.list(target).then(contacts => {
+        const candidates = [...new Map([
+          ...clientContactsService.byPurpose(contacts, 'cobranca'), ...clientContactsService.byPurpose(contacts, 'boleto'),
+          ...clientContactsService.byPurpose(contacts, 'notaFiscal'),
+        ].map(contact => [contact.id, contact])).values()];
+        setContatosFinanceiros(candidates);
+        const preferred = candidates[0];
+        if (preferred) setForm(previous => ({ ...previous, contatoFinanceiroId: preferred.id, contatoFinanceiroNome: preferred.nome, contatoFinanceiroEmail: preferred.email || '', contatoFinanceiroTelefone: preferred.celularWhatsapp || preferred.telefone || '' }));
+      });
     }
   };
 
@@ -278,6 +294,7 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
     setForm({
       clienteId: '',
       clienteNome: '',
+      contatoFinanceiroId: '', contatoFinanceiroNome: '', contatoFinanceiroEmail: '', contatoFinanceiroTelefone: '',
       unidadeId: '',
       unidadeNome: '',
       numeroContrato: `CTR-${Math.floor(Math.random() * 9000) + 1000}`,
@@ -307,6 +324,10 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
     setForm({
       clienteId: contract.clienteId,
       clienteNome: contract.clienteNome,
+      contatoFinanceiroId: contract.contatoFinanceiroId || '',
+      contatoFinanceiroNome: contract.contatoFinanceiroNome || '',
+      contatoFinanceiroEmail: contract.contatoFinanceiroEmail || '',
+      contatoFinanceiroTelefone: contract.contatoFinanceiroTelefone || '',
       unidadeId: contract.unidadeId || '',
       unidadeNome: contract.unidadeNome || '',
       numeroContrato: contract.numeroContrato,
@@ -326,6 +347,10 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
       emitirNfseRecorrente: contract.emitirNfseRecorrente === true,
       fiscal: { descricaoServico: contract.fiscal?.descricaoServico || contract.descricaoServico, codigoServicoMunicipal: contract.fiscal?.codigoServicoMunicipal || '', itemLc116: contract.fiscal?.itemLc116 || '', cnae: contract.fiscal?.cnae || '', nbs: contract.fiscal?.nbs || '', aliquotaIss: contract.fiscal?.aliquotaIss || 0, issRetido: contract.fiscal?.issRetido === true, municipioPrestacao: contract.fiscal?.municipioPrestacao || '', naturezaOperacao: contract.fiscal?.naturezaOperacao || '', declaracaoAdicional: contract.fiscal?.declaracaoAdicional || '', valorNfse: contract.fiscal?.valorNfse || contract.valorMensal, gerarBoleto: contract.fiscal?.gerarBoleto === true }
     });
+    const client = clientes.find(item => item.id === contract.clienteId);
+    if (client) void clientContactsService.list(client).then(contacts => setContatosFinanceiros([...new Map([
+      ...clientContactsService.byPurpose(contacts, 'cobranca'), ...clientContactsService.byPurpose(contacts, 'boleto'), ...clientContactsService.byPurpose(contacts, 'notaFiscal'),
+    ].map(contact => [contact.id, contact])).values()]));
     setSyncValueWithItens(false); // Let edits preserve actual set value
     setIsDrawerOpen(true);
   };
@@ -970,6 +995,23 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-1.5">Contato financeiro / fiscal</label>
+                <select
+                  value={form.contatoFinanceiroId}
+                  onChange={event => {
+                    const contact = contatosFinanceiros.find(item => item.id === event.target.value);
+                    setForm(previous => ({ ...previous, contatoFinanceiroId: contact?.id || '', contatoFinanceiroNome: contact?.nome || '', contatoFinanceiroEmail: contact?.email || '', contatoFinanceiroTelefone: contact?.celularWhatsapp || contact?.telefone || '' }));
+                  }}
+                  disabled={!form.clienteId || contatosFinanceiros.length === 0}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:border-blue-500 bg-white"
+                >
+                  <option value="">{contatosFinanceiros.length ? 'Selecione o contato' : 'Nenhum contato financeiro marcado'}</option>
+                  {contatosFinanceiros.map(contact => <option key={contact.id} value={contact.id}>{contact.nome} — {contact.departamentoOutro || contact.departamento || 'Contato'}</option>)}
+                </select>
+                <p className="mt-1 text-[9px] text-slate-400">Prioriza contatos marcados para cobrança, boleto ou nota fiscal.</p>
               </div>
 
               {/* Unidade list based on customer selection */}

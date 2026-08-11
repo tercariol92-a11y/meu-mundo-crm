@@ -97,15 +97,38 @@ app.get('/api/fiscal/environment', protect, (req: any, res) => {
   res.json({ success: true, data: { ...environment, companyId: req.fiscal.companyId, productionBlocked: environment.environment !== 'producao', transmissionEnabled: environment.environment === 'producao' && environment.productionEnabled } });
 });
 
-app.post('/api/fiscal/certificate/validate', protect, async (req: any, res, next) => { try {
-  const input = readCertificate(req.body); const parsed = parsePkcs12(input.buffer, input.password, String(req.body?.expectedCnpj || ''));
+app.post('/api/fiscal/certificate/validate', protect, async (req: any, res, next) => {
+  const requestId = randomBytes(8).toString('hex');
+  let stage = 'receive_request';
+  let receivedBytes = 0;
+  const safeRequest = {
+    requestId,
+    endpoint: '/api/fiscal/certificate/validate',
+    method: req.method,
+    mimeType: typeof req.body?.mimeType === 'string' ? req.body.mimeType : undefined,
+    certificatePayloadPresent: typeof req.body?.certificateBase64 === 'string' && req.body.certificateBase64.length > 0,
+    passwordPresent: typeof req.body?.password === 'string' && req.body.password.length > 0,
+  };
+  try {
+  stage = 'decode_pkcs12';
+  const input = readCertificate(req.body); receivedBytes = input.buffer.length;
+  stage = 'open_pkcs12';
+  const parsed = parsePkcs12(input.buffer, input.password, String(req.body?.expectedCnpj || ''));
+  stage = 'persist_private_certificate';
   const root = resolve(process.env.FISCAL_CERTIFICATE_STORAGE_PATH || './fiscal-private'); const companyDir = resolve(root, req.fiscal.companyId, 'certificates');
   if (!companyDir.startsWith(`${root}${sep}`)) throw new Error('Caminho privado inválido.');
   await mkdir(companyDir, { recursive: true, mode: 0o700 }); const path = resolve(companyDir, 'active.pfx'); await writeFile(path, input.buffer, { mode: 0o600 }); await chmod(path, 0o600);
+  stage = 'persist_certificate_metadata';
   await req.fiscal.db.collection('companies').doc(req.fiscal.companyId).collection('fiscal').doc('certificate').set({ ...parsed.metadata, storageReference: 'private://active-certificate', updatedBy: req.fiscal.decoded.uid, updatedAt: FieldValue.serverTimestamp() });
+  stage = 'write_audit';
   await writeFiscalAudit(req.fiscal.db, req.fiscal.companyId, req.fiscal.decoded.uid, 'certificate_validated', { serialNumberMasked: parsed.metadata.serialNumberMasked, validTo: parsed.metadata.validTo, cnpj: parsed.metadata.cnpj, chainValid: parsed.metadata.chain.valid });
+  console.info('[FISCAL CERTIFICATE VALIDATION]', { ...safeRequest, status: 200, stage: 'complete', receivedBytes, pkcs12Opened: true });
   res.json({ success: true, data: parsed.metadata });
-} catch (error) { next(error); } });
+  } catch (error) {
+    console.error('[FISCAL CERTIFICATE VALIDATION]', { ...safeRequest, status: Number((error as any)?.status || 500), stage, receivedBytes, pkcs12Opened: stage !== 'decode_pkcs12' && stage !== 'open_pkcs12', code: (error as any)?.code, message: error instanceof Error ? error.message : 'unknown' });
+    next(error);
+  }
+});
 
 app.post('/api/fiscal/mtls/test', protect, async (req: any, res, next) => { try {
   const input = readCertificate(req.body); const parsed = parsePkcs12(input.buffer, input.password, String(req.body?.expectedCnpj || '')); const environment = getFiscalEnvironment();

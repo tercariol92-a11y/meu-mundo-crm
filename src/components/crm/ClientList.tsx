@@ -363,6 +363,13 @@ export default function ClientList({ user, onViewChange }: ClientListProps) {
           onSave={handleSave}
           onClose={() => { setShowForm(false); setSelectedCliente(undefined); }}
           userId={userId}
+          onOpenWhatsApp={(contact) => {
+            const phone = contact.celularWhatsapp || contact.telefone || '';
+            localStorage.setItem('whatsapp_target_phone', phone);
+            localStorage.setItem('whatsapp_target_name', contact.nome);
+            setShowForm(false);
+            onViewChange?.('atendimento');
+          }}
         />
       )}
 

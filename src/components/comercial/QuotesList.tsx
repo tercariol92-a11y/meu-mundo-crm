@@ -35,6 +35,7 @@ import { proposalTotals } from '../../utils/proposalTotals';
 import ProposalViewer from './ProposalViewer';
 import NegotiationDrawer from './NegotiationDrawer';
 import { useGlobalData } from '../../contexts/GlobalDataContext';
+import { ProposalSortOption, sortProposals } from '../../utils/proposalOrdering';
 
 interface QuotesListProps {
   user: Usuario;
@@ -50,6 +51,7 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('Todos');
   const [vendedorFilter, setVendedorFilter] = useState<string>('Todos');
+  const [sortOption, setSortOption] = useState<ProposalSortOption>('recentes');
   const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [selectedQuote, setSelectedQuote] = useState<Proposta | null>(null);
   const [viewingQuote, setViewingQuote] = useState<Proposta | null>(null);
@@ -106,7 +108,7 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
     ) || [];
   }, [usersData]);
 
-  const filteredQuotes = useMemo(() => quotes.filter(quote => {
+  const filteredQuotes = useMemo(() => sortProposals(quotes.filter(quote => {
     const entityName = getClientOrLeadName(quote).toLowerCase();
     const matchesSearch = 
       (quote.titulo?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
@@ -114,7 +116,7 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
     const matchesStatus = statusFilter === 'Todos' || quote.status === statusFilter;
     const matchesVendedor = vendedorFilter === 'Todos' || quote.vendedorId === vendedorFilter;
     return matchesSearch && matchesStatus && matchesVendedor;
-  }), [quotes, searchTerm, statusFilter, vendedorFilter, clientsData, leadsData]);
+  }), sortOption), [quotes, searchTerm, statusFilter, vendedorFilter, sortOption, clientsData, leadsData]);
 
   const approvedTotals = quotes.filter(q => q.status === 'Aprovado').map(proposalTotals);
   const stats = {
@@ -282,7 +284,7 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
       </div>
 
       {/* Filters */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" size={18} />
           <input
@@ -320,6 +322,20 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
             {vendedores.map(v => (
               <option key={v.id} value={v.id}>{v.nome}</option>
             ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <TrendingUp size={18} className="text-on-surface-variant" />
+          <select
+            aria-label="Ordenar orçamentos"
+            className="flex-1 bg-surface-container-low border border-surface-container-high rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+            value={sortOption}
+            onChange={(event) => setSortOption(event.target.value as ProposalSortOption)}
+          >
+            <option value="recentes">Mais recentes</option>
+            <option value="antigos">Mais antigos</option>
+            <option value="maior_valor">Maior valor</option>
+            <option value="menor_valor">Menor valor</option>
           </select>
         </div>
       </div>

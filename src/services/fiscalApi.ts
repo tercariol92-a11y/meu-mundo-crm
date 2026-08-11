@@ -4,9 +4,25 @@ async function callFiscal(path: string, body: Record<string, unknown>) {
   const currentUser = auth.currentUser;
   if (!currentUser) throw new Error('Faça login novamente para validar o certificado.');
   const response = await fetch(path, { method: 'POST', headers: { Authorization: `Bearer ${await currentUser.getIdToken()}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const result = await response.json().catch(() => null);
+  const contentType = response.headers.get('content-type') || '';
+  const responseText = await response.text();
+  let result: any = null;
+  if (contentType.toLowerCase().includes('application/json')) {
+    try { result = JSON.parse(responseText); } catch { /* mensagem controlada abaixo */ }
+  }
   if (!response.ok || !result?.success) {
-    const error = new Error(result?.error || `Falha fiscal HTTP ${response.status}.`) as Error & { data?: Record<string, unknown>; code?: string };
+    const controlledMessages: Record<string, string> = {
+      INVALID_PKCS12: 'Certificado não pôde ser processado: senha incorreta ou arquivo PFX/P12 inválido.',
+      PRIVATE_KEY_MISSING: 'O certificado A1 não contém uma chave privada.',
+      CERTIFICATE_EXPIRED: 'O certificado A1 está expirado.',
+      CERTIFICATE_CNPJ_MISMATCH: 'O CNPJ do certificado é incompatível com a empresa.',
+      INVALID_CERTIFICATE_FILENAME: 'Selecione um arquivo de certificado .pfx ou .p12 válido.',
+      INVALID_CERTIFICATE_MIME: 'O navegador enviou o certificado em um formato incompatível.',
+      FISCAL_SERVICE_NOT_CONFIGURED: 'O serviço fiscal não está configurado.',
+      FISCAL_PROXY_ERROR: 'O serviço fiscal está temporariamente indisponível.',
+    };
+    const fallback = result ? `Falha fiscal HTTP ${response.status}.` : `Serviço fiscal retornou HTTP ${response.status} em formato inválido (${contentType || 'sem Content-Type'}).`;
+    const error = new Error(controlledMessages[result?.code] || result?.error || fallback) as Error & { data?: Record<string, unknown>; code?: string };
     error.data = result?.data;
     error.code = result?.code;
     throw error;

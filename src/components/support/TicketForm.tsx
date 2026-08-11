@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { databaseService } from '../../services/databaseService';
-import { Cliente, Unidade, EquipamentoCliente, Tecnico, Chamado } from '../../types';
+import { Cliente, ClienteContato, Unidade, EquipamentoCliente, Tecnico, Chamado } from '../../types';
+import { clientContactsService } from '../../services/clientContactsService';
 import { 
   X, 
   Save, 
@@ -40,6 +41,7 @@ export default function TicketForm({ onClose, onSave, chamado }: TicketFormProps
   const [unidades, setUnidades] = useState<Unidade[]>([]);
   const [equipamentos, setEquipamentos] = useState<EquipamentoCliente[]>([]);
   const [tecnicos, setTecnicos] = useState<Tecnico[]>([]);
+  const [contatosCliente, setContatosCliente] = useState<ClienteContato[]>([]);
   
   // Intelligence State
   const [equipmentHistory, setEquipmentHistory] = useState<Chamado[]>([]);
@@ -54,6 +56,10 @@ export default function TicketForm({ onClose, onSave, chamado }: TicketFormProps
 
   const [formData, setFormData] = useState<Partial<Chamado>>({
     clienteId: chamado?.clienteId || '',
+    contatoId: chamado?.contatoId || '',
+    contatoNome: chamado?.contatoNome || '',
+    contatoTelefone: chamado?.contatoTelefone || '',
+    contatoEmail: chamado?.contatoEmail || '',
     unidadeId: chamado?.unidadeId || '',
     equipamentoClienteId: chamado?.equipamentoClienteId || '',
     tecnicoId: chamado?.tecnicoId || '',
@@ -93,22 +99,30 @@ export default function TicketForm({ onClose, onSave, chamado }: TicketFormProps
       if (!formData.clienteId) {
         setUnidades([]);
         setEquipamentos([]);
+        setContatosCliente([]);
         return;
       }
 
       try {
-        const [u, e] = await Promise.all([
+        const client = clientes.find(item => item.id === formData.clienteId);
+        const [u, e, contacts] = await Promise.all([
           databaseService.getUnidades(formData.clienteId),
-          databaseService.getEquipamentosCliente(formData.clienteId)
+          databaseService.getEquipamentosCliente(formData.clienteId),
+          client ? clientContactsService.list(client) : Promise.resolve([]),
         ]);
         setUnidades(u || []);
         setEquipamentos(e || []);
+        setContatosCliente(contacts);
+        if (!formData.contatoId && contacts.length) {
+          const preferred = clientContactsService.byPurpose(contacts, 'chamados')[0];
+          setFormData(previous => ({ ...previous, contatoId: preferred.id, contatoNome: preferred.nome, contatoTelefone: preferred.celularWhatsapp || preferred.telefone || '', contatoEmail: preferred.email || '' }));
+        }
       } catch (err) {
         console.error('Error loading client-specific data:', err);
       }
     };
     loadClientData();
-  }, [formData.clienteId]);
+  }, [formData.clienteId, clientes]);
 
   // Intelligence Effect: Equipment History & Suggestions
   useEffect(() => {
@@ -398,13 +412,32 @@ export default function TicketForm({ onClose, onSave, chamado }: TicketFormProps
                   <select 
                     className={`${inputClass} pl-12`}
                     value={formData.clienteId}
-                    onChange={(e) => setFormData({ ...formData, clienteId: e.target.value, unidadeId: '', equipamentoClienteId: '' })}
+                    onChange={(e) => setFormData({ ...formData, clienteId: e.target.value, contatoId: '', contatoNome: '', contatoTelefone: '', contatoEmail: '', unidadeId: '', equipamentoClienteId: '' })}
                     required
                   >
                     <option value="">Selecione o Cliente</option>
                     {clientes.map(c => (
                       <option key={c.id} value={c.id}>{c.nomeFantasia}</option>
                     ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className={labelClass}>Contato do cliente</label>
+                <div className="relative">
+                  <User className="absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant" size={18} />
+                  <select
+                    className={`${inputClass} pl-12`}
+                    value={formData.contatoId || ''}
+                    disabled={!formData.clienteId || contatosCliente.length === 0}
+                    onChange={(event) => {
+                      const contact = contatosCliente.find(item => item.id === event.target.value);
+                      setFormData(previous => ({ ...previous, contatoId: contact?.id || '', contatoNome: contact?.nome || '', contatoTelefone: contact?.celularWhatsapp || contact?.telefone || '', contatoEmail: contact?.email || '' }));
+                    }}
+                  >
+                    <option value="">{contatosCliente.length ? 'Selecione o contato' : 'Nenhum contato cadastrado'}</option>
+                    {contatosCliente.map(contact => <option key={contact.id} value={contact.id}>{contact.nome} — {contact.departamentoOutro || contact.departamento || 'Contato'}{contact.isPrimary ? ' (Principal)' : ''}</option>)}
                   </select>
                 </div>
               </div>

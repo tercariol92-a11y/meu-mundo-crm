@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { 
   Proposta, 
   Cliente, 
+  ClienteContato,
   Lead, 
   Produto, 
   ItemProposta,
@@ -26,6 +27,7 @@ import {
 import { useCompanyConfig } from '../../hooks/useCompanyConfig';
 import { motion, AnimatePresence } from 'framer-motion';
 import { calculateProposalTotals, normalizeProposalItem } from '../../utils/proposalTotals';
+import { clientContactsService } from '../../services/clientContactsService';
 
 interface QuoteWizardProps {
   user: Usuario;
@@ -53,6 +55,8 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
         ? { id: atendimentoContext.clienteId, type: 'cliente' as const, name: atendimentoContext.contato?.nome || '' }
         : { id: atendimentoContext.leadId || '', type: 'lead' as const, name: atendimentoContext.contato?.nome || 'Contato WhatsApp' }) : null
   );
+  const [clientContacts, setClientContacts] = useState<ClienteContato[]>([]);
+  const [selectedContactId, setSelectedContactId] = useState(initialData?.contatoId || '');
 
   // Step 2: Products
   const [products, setProducts] = useState<Produto[]>([]);
@@ -83,6 +87,18 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
   useEffect(() => {
     fetchData();
   }, []);
+
+  useEffect(() => {
+    const loadContacts = async () => {
+      if (selectedEntity?.type !== 'cliente') return setClientContacts([]);
+      const client = clients.find(item => item.id === selectedEntity.id);
+      if (!client) return;
+      const contacts = await clientContactsService.list(client);
+      setClientContacts(contacts);
+      if (!selectedContactId && contacts.length) setSelectedContactId(clientContactsService.byPurpose(contacts, 'orcamento')[0].id);
+    };
+    void loadContacts();
+  }, [selectedEntity?.id, selectedEntity?.type, clients]);
 
   const fetchData = async () => {
     try {
@@ -266,6 +282,10 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
         investimentoInicial: totals.investimentoInicial,
         clienteId: selectedEntity.type === 'cliente' ? selectedEntity.id : undefined,
         clienteNome: selectedEntity.type === 'cliente' ? selectedEntity.name : undefined,
+        ...(selectedEntity.type === 'cliente' && selectedContactId ? (() => {
+          const contact = clientContacts.find(item => item.id === selectedContactId);
+          return { contatoId: contact?.id, contatoNome: contact?.nome, contatoTelefone: contact?.celularWhatsapp || contact?.telefone, contatoEmail: contact?.email };
+        })() : {}),
         leadId: selectedEntity.type === 'lead' ? selectedEntity.id : undefined,
         leadNome: selectedEntity.type === 'lead' ? selectedEntity.name : undefined,
         ...formData
@@ -381,7 +401,7 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
                     {filteredEntities.map((entity) => (
                       <button
                         key={`${entity.type}-${entity.id}`}
-                        onClick={() => setSelectedEntity(entity)}
+                        onClick={() => { setSelectedEntity(entity); setSelectedContactId(''); }}
                         className={`flex items-center gap-4 p-4 rounded-2xl border transition-all text-left ${
                           selectedEntity?.id === entity.id 
                             ? 'bg-primary/10 border-primary shadow-sm' 
@@ -407,6 +427,15 @@ export default function QuoteWizard({ user, onClose, onSave, initialData, atendi
                       </button>
                     ))}
                   </div>
+                  {selectedEntity?.type === 'cliente' && (
+                    <div className="p-4 rounded-2xl border border-surface-container-high bg-surface-container-low">
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-on-surface-variant mb-2">Contato que receberá o orçamento</label>
+                      <select className="w-full px-4 py-3 rounded-xl border border-surface-container-high bg-surface" value={selectedContactId} onChange={event => setSelectedContactId(event.target.value)}>
+                        <option value="">Selecione o contato</option>
+                        {clientContacts.map(contact => <option key={contact.id} value={contact.id}>{contact.nome} — {contact.departamentoOutro || contact.departamento || 'Contato'}{contact.recebeOrcamento ? ' · Recebe orçamento' : ''}</option>)}
+                      </select>
+                    </div>
+                  )}
                 </div>
               </motion.div>
             )}

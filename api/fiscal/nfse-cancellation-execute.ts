@@ -1,4 +1,4 @@
-import { proxyFiscal } from './_shared';
+import { proxyFiscal } from './_shared.js';
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ success: false, code: 'METHOD_NOT_ALLOWED', error: 'Método não permitido.' }); }

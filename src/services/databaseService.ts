@@ -36,6 +36,7 @@ import { auth, db, storage, firebaseConfig, triggerMockAuthStateChanged, onAuthS
 import { whatsappService } from './whatsapp.service';
 import { notifyAssignedTechnician, requestTicketSatisfaction } from './supportTicketNotifications';
 import { calculateProposalTotals, proposalTotals } from '../utils/proposalTotals';
+import { sortProposals } from '../utils/proposalOrdering';
 import { 
   Usuario, 
   CustomerPortalUser,
@@ -2772,8 +2773,10 @@ export const databaseService = {
 
   async getPropostas() {
     try {
-      const snap = await getDocs(query(collection(db, 'propostas'), orderBy('createdAt', 'desc')));
-      return snap.docs.map(mapDoc) as Proposta[];
+      // Sort in the application so legacy proposals without `createdAt` are not
+      // excluded by a Firestore orderBy query and can use the safe date fallback.
+      const snap = await getDocs(collection(db, 'propostas'));
+      return sortProposals(snap.docs.map(mapDoc) as Proposta[], 'recentes');
     } catch (error) {
       handleFirestoreError(error, OperationType.LIST, 'propostas');
     }

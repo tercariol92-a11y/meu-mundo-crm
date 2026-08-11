@@ -1,4 +1,4 @@
-import { proxyFiscal } from './_shared';
+import { proxyFiscal } from './_shared.js';
 
 export default (req: any, res: any) => proxyFiscal(
   req,

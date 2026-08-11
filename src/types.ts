@@ -235,6 +235,35 @@ export interface Cliente {
   updatedAt?: string;
 }
 
+export type ClienteContatoDepartamento =
+  | 'TI' | 'Compras' | 'Financeiro' | 'RH' | 'Departamento Pessoal'
+  | 'Comercial' | 'Diretoria' | 'Administrativo' | 'Manutenção'
+  | 'Segurança' | 'Portaria' | 'Outro';
+
+export interface ClienteContato {
+  id: string;
+  clienteId: string;
+  nome: string;
+  cargo?: string;
+  departamento?: ClienteContatoDepartamento;
+  departamentoOutro?: string;
+  telefone?: string;
+  celularWhatsapp?: string;
+  email?: string;
+  ramal?: string;
+  observacoes?: string;
+  isPrimary: boolean;
+  recebeWhatsapp?: boolean;
+  recebeCobranca?: boolean;
+  recebeBoleto?: boolean;
+  recebeNotaFiscal?: boolean;
+  recebeOrcamento?: boolean;
+  recebeChamados?: boolean;
+  contatoTecnico?: boolean;
+  createdAt?: any;
+  updatedAt?: any;
+}
+
 export interface Unidade {
   id: string;
   clienteId: string;
@@ -372,6 +401,10 @@ export interface Chamado {
   id: string;
   protocolo?: string;
   clienteId: string;
+  contatoId?: string;
+  contatoNome?: string;
+  contatoTelefone?: string;
+  contatoEmail?: string;
   unidadeId: string;
   equipamentoId?: string;
   equipamentoClienteId?: string;
@@ -614,6 +647,10 @@ export interface Proposta {
   id: string;
   leadId?: string;
   clienteId?: string;
+  contatoId?: string;
+  contatoNome?: string;
+  contatoTelefone?: string;
+  contatoEmail?: string;
   clienteNome?: string;
   leadNome?: string;
   titulo: string;
@@ -1264,6 +1301,10 @@ export interface ContratoRecorrente {
   id: string;
   clienteId: string;
   clienteNome: string;
+  contatoFinanceiroId?: string;
+  contatoFinanceiroNome?: string;
+  contatoFinanceiroEmail?: string;
+  contatoFinanceiroTelefone?: string;
   unidadeId?: string;
   unidadeNome?: string;
   numeroContrato: string;

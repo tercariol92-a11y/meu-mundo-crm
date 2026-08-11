@@ -4,6 +4,7 @@ import { databaseService, OperationType, handleFirestoreError, mapDoc } from '..
 import { collection, onSnapshot, query, where } from '../services/resilientFirestoreClient';
 import { db, auth, onAuthStateChanged } from '../firebase';
 import { isAgendaAdmin, resolveCompanyId } from '../services/commercialAgendaService';
+import { sortProposals } from '../utils/proposalOrdering';
 
 interface GlobalDataContextType {
   clientes: Cliente[];
@@ -97,7 +98,7 @@ export function GlobalDataProvider({ children }: { children: React.ReactNode }) 
     });
 
     const unsubPropostas = onSnapshot(collection(db, 'propostas'), (snap) => {
-      setPropostas(snap.docs.map(doc => mapDoc(doc) as Proposta));
+      setPropostas(sortProposals(snap.docs.map(doc => mapDoc(doc) as Proposta), 'recentes'));
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'propostas');
     });
