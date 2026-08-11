@@ -491,7 +491,7 @@ export const prospectingService = {
     const prospectSnapshot = await getDoc(prospectRef);
     await updateDoc(prospectRef, {
       status: 'Em contato', mensagensEnviadas: Number(prospectSnapshot.data()?.mensagensEnviadas || 0) + 1,
-      ultimoContato: serverTimestamp(), ultimoMessageId: result.messageId, ultimoSessionId: result.sessionId,
+      ultimoContato: serverTimestamp(), ultimoEnvioWhatsApp: serverTimestamp(), ultimoMessageId: result.messageId, ultimoSessionId: result.sessionId,
       responsavelId: effectiveAttendantId, responsavelNome: attendant, updatedAt: serverTimestamp()
     });
     return { ...result, prospectLeadId: safeLeadId };

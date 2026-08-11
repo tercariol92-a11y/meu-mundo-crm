@@ -560,6 +560,9 @@ export interface Lead {
   ultimaMensagem?: string;
   unreadCount?: number;
   dataInteracao?: string;
+  mensagensEnviadas?: number;
+  ultimoContato?: any;
+  ultimoEnvioWhatsApp?: any;
   createdAt?: string;
   updatedAt?: string;
   criadoEm?: any;

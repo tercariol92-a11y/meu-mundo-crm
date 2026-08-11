@@ -102,6 +102,10 @@ export default function ProspectingModule({ user, initialTab = 'buscar', onViewC
   const [whatsAppMessage, setWhatsAppMessage] = useState('');
   const [whatsAppTemplateId, setWhatsAppTemplateId] = useState('');
   const [isSendingWhatsApp, setIsSendingWhatsApp] = useState(false);
+  const [selectedProspectLeadIds, setSelectedProspectLeadIds] = useState<string[]>([]);
+  const [isBulkWhatsAppMode, setIsBulkWhatsAppMode] = useState(false);
+  const [bulkSendProgress, setBulkSendProgress] = useState<{ current: number; total: number } | null>(null);
+  const [bulkSendStatuses, setBulkSendStatuses] = useState<Record<string, { status: 'pending' | 'sending' | 'sent' | 'error'; error?: string }>>({});
 
   // Statistics summaries
   const [stats, setStats] = useState({
@@ -509,9 +513,58 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
           .replace(/\{\{CIDADE\}\}/g, lead.cidade || 'sua cidade')
       : `Olá ${lead.nome}! Gostaríamos de oferecer soluções em segurança para seu negócio.`;
 
+    setIsBulkWhatsAppMode(false);
     setSelectedLeadForWhatsApp(lead);
     setWhatsAppTemplateId(activeTemplate?.id || '');
     setWhatsAppMessage(msgText);
+  };
+
+  const personalizeWhatsAppMessage = (message: string, lead: Lead) => message
+    .replace(/\{\{NOME_EMPRESA\}\}/g, lead.empresa || lead.nome)
+    .replace(/\{\{CIDADE\}\}/g, lead.cidade || 'sua cidade');
+
+  const sendConfirmedWhatsAppToLead = async (lead: Lead, message: string) => {
+    const selectedTemplate = whatsAppTemplateId ? templates.find(item => item.id === whatsAppTemplateId) : undefined;
+    if (whatsAppTemplateId && (!selectedTemplate?.id || !selectedTemplate.body?.trim())) {
+      throw new Error('Selecione um template válido antes de enviar.');
+    }
+    const authenticatedUid = auth.currentUser?.uid || user.id;
+    const result = await prospectingService.sendManualWhatsApp(
+      lead.id,
+      lead.empresa || lead.nome,
+      lead.telefone || lead.whatsapp || '',
+      personalizeWhatsAppMessage(message, lead),
+      user.nome || user.email.split('@')[0],
+      authenticatedUid,
+      user.email,
+      selectedTemplate ? { id: selectedTemplate.id, name: selectedTemplate.name } : undefined
+    );
+    const sentAt = new Date().toISOString();
+    setProspectLeads(current => current.map(item => item.id === lead.id ? {
+      ...item,
+      id: result.prospectLeadId,
+      status: 'Em contato',
+      dataInteracao: sentAt,
+      ultimoContato: sentAt,
+      ultimoEnvioWhatsApp: sentAt,
+      mensagensEnviadas: Number(item.mensagensEnviadas || 0) + 1
+    } as Lead : item));
+    setStats(current => ({ ...current, sent: current.sent + 1 }));
+    return result;
+  };
+
+  const handleOpenBulkWhatsAppSend = () => {
+    const selected = prospectLeads.filter(lead => selectedProspectLeadIds.includes(lead.id));
+    if (!selected.length) {
+      toast.error('Selecione ao menos um cliente com WhatsApp.');
+      return;
+    }
+    const activeTemplate = templates.find(t => t.type === 'whatsapp');
+    setIsBulkWhatsAppMode(true);
+    setSelectedLeadForWhatsApp(selected[0]);
+    setWhatsAppTemplateId(activeTemplate?.id || '');
+    setWhatsAppMessage(activeTemplate?.body || 'Olá {{NOME_EMPRESA}}! Gostaríamos de apresentar nossas soluções para sua empresa.');
+    setBulkSendStatuses(Object.fromEntries(selected.map(lead => [lead.id, { status: 'pending' as const }])));
   };
 
   const handleConfirmWhatsAppSend = async () => {
@@ -521,29 +574,39 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
       setIsSendingWhatsApp(true);
       const message = whatsAppMessage.trim();
       if (!message) throw new Error('Escreva uma mensagem antes de enviar.');
-      const selectedTemplate = whatsAppTemplateId ? templates.find(item => item.id === whatsAppTemplateId) : undefined;
-      if (whatsAppTemplateId && (!selectedTemplate?.id || !selectedTemplate.body?.trim())) {
-        throw new Error('Selecione um template válido antes de enviar.');
+      if (isBulkWhatsAppMode) {
+        const selected = prospectLeads.filter(item => selectedProspectLeadIds.includes(item.id));
+        let sent = 0;
+        let errors = 0;
+        for (let index = 0; index < selected.length; index += 1) {
+          const currentLead = selected[index];
+          setBulkSendProgress({ current: index + 1, total: selected.length });
+          setBulkSendStatuses(current => ({ ...current, [currentLead.id]: { status: 'sending' } }));
+          try {
+            await sendConfirmedWhatsAppToLead(currentLead, message);
+            sent += 1;
+            setBulkSendStatuses(current => ({ ...current, [currentLead.id]: { status: 'sent' } }));
+          } catch (error: any) {
+            errors += 1;
+            setBulkSendStatuses(current => ({ ...current, [currentLead.id]: { status: 'error', error: error?.message || 'Falha no envio' } }));
+          }
+          if (index < selected.length - 1) await new Promise(resolve => window.setTimeout(resolve, 5000));
+        }
+        await prospectingService.createLog('Envio em massa concluído', `${sent} mensagem(ns) confirmada(s) e ${errors} erro(s).`, errors ? 'warning' : 'success');
+        toast.success(`Fila concluída: ${sent} enviado(s), ${errors} erro(s).`);
+        setSelectedProspectLeadIds([]);
+        setSelectedLeadForWhatsApp(null);
+        setIsBulkWhatsAppMode(false);
+        setBulkSendProgress(null);
+        return;
       }
-      const authenticatedUid = auth.currentUser?.uid || user.id;
-      const result = await prospectingService.sendManualWhatsApp(
-        lead.id,
-        lead.empresa || lead.nome,
-        lead.telefone || lead.whatsapp || '',
-        message,
-        user.nome || user.email.split('@')[0],
-        authenticatedUid,
-        user.email,
-        selectedTemplate ? { id: selectedTemplate.id, name: selectedTemplate.name } : undefined
-      );
+      const result = await sendConfirmedWhatsAppToLead(lead, message);
       await prospectingService.createLog(
         'Mensagem Manual Enviada', 
         `Mensagem comercial confirmada pelo WhatsApp para "${lead.nome}". ID: ${result.messageId}.`,
         'success'
       );
       toast.success(`Mensagem enviada com sucesso para ${lead.empresa || lead.nome}.`);
-      setProspectLeads(current => current.map(item => item.id === lead.id ? { ...item, id: result.prospectLeadId, status: 'Em contato', dataInteracao: new Date().toISOString(), mensagensEnviadas: Number((item as any).mensagensEnviadas || 0) + 1 } as Lead : item));
-      setStats(current => ({ ...current, sent: current.sent + 1 }));
       setSelectedLeadForWhatsApp(null);
       sessionStorage.setItem('atendimento:openLeadId', result.conversationId);
       onViewChange?.('atendimento');
@@ -558,6 +621,16 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
     if (!value) return 'Não informado';
     const raw = typeof value?.toDate === 'function' ? value.toDate() : typeof value?.seconds === 'number' ? new Date(value.seconds * 1000) : new Date(value);
     return Number.isNaN(raw.getTime()) ? 'Não informado' : raw.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
+
+  const hasProspectWhatsApp = (lead: Lead) => Boolean((lead.telefone || lead.whatsapp || '').replace(/\D/g, ''));
+
+  const bulkStatusLabel = (leadId: string) => {
+    const item = bulkSendStatuses[leadId];
+    if (!item) return null;
+    const labels = { pending: 'Pendente', sending: 'Enviando', sent: 'Enviado', error: 'Erro' } as const;
+    const styles = { pending: 'bg-amber-500/10 text-amber-600', sending: 'bg-sky-500/10 text-sky-600', sent: 'bg-emerald-500/10 text-emerald-600', error: 'bg-red-500/10 text-red-600' } as const;
+    return <span title={item.error} className={`inline-flex mt-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase ${styles[item.status]}`}>{labels[item.status]}</span>;
   };
 
   return (
@@ -900,18 +973,39 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
               </div>
             ) : prospectLeads.length > 0 ? (
               <div className="border border-surface-container-high rounded-xl overflow-hidden bg-surface-container">
-                <div className="p-4 bg-surface border-b border-surface-container-high">
-                  <h3 className="text-xs font-extrabold text-on-surface uppercase tracking-wider">Base de Leads Capturados via Google Maps ({prospectLeads.length})</h3>
+                <div className="p-4 bg-surface border-b border-surface-container-high flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-xs font-extrabold text-on-surface uppercase tracking-wider">Base de Leads Capturados via Google Maps ({prospectLeads.length})</h3>
+                    {bulkSendProgress && <p className="mt-1 text-xs font-bold text-primary">Enviando {bulkSendProgress.current} de {bulkSendProgress.total}</p>}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!selectedProspectLeadIds.length || isSendingWhatsApp}
+                    onClick={handleOpenBulkWhatsAppSend}
+                    className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-[10px] font-black uppercase tracking-wider text-on-primary disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Send size={14} /> Enviar selecionados ({selectedProspectLeadIds.length})
+                  </button>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs border-collapse">
                     <thead>
                       <tr className="bg-surface text-on-surface-variant text-[10px] font-black uppercase tracking-wider border-b border-surface-container-high">
+                        <th className="py-3 px-4 w-10">
+                          <input
+                            type="checkbox"
+                            aria-label="Selecionar todos os clientes com WhatsApp"
+                            disabled={isSendingWhatsApp}
+                            checked={prospectLeads.some(hasProspectWhatsApp) && prospectLeads.filter(hasProspectWhatsApp).every(lead => selectedProspectLeadIds.includes(lead.id))}
+                            onChange={event => setSelectedProspectLeadIds(event.target.checked ? prospectLeads.filter(hasProspectWhatsApp).map(lead => lead.id) : [])}
+                          />
+                        </th>
                         <th className="py-3 px-4">Nome fantasia</th>
                         <th className="py-3 px-4">Cidade / Região</th>
                         <th className="py-3 px-4">DDD / WhatsApp</th>
                         <th className="py-3 px-4">Status no CRM</th>
                         <th className="py-3 px-4">Informado em</th>
+                        <th className="py-3 px-4">Último envio</th>
                         <th className="py-3 px-4 text-center w-36">Ações Rápidas</th>
                       </tr>
                     </thead>
@@ -919,6 +1013,15 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
                       {prospectLeads.map(lead => {
                         return (
                           <tr key={lead.id} className="hover:bg-primary/5 transition-all">
+                            <td className="py-3 px-4">
+                              <input
+                                type="checkbox"
+                                aria-label={`Selecionar ${lead.empresa || lead.nome}`}
+                                disabled={!hasProspectWhatsApp(lead) || isSendingWhatsApp}
+                                checked={selectedProspectLeadIds.includes(lead.id)}
+                                onChange={event => setSelectedProspectLeadIds(current => event.target.checked ? [...new Set([...current, lead.id])] : current.filter(id => id !== lead.id))}
+                              />
+                            </td>
                             <td className="py-3 px-4 font-bold text-on-surface text-sm">
                               {lead.nome}
                             </td>
@@ -941,10 +1044,15 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
                             <td className="py-3 px-4 text-[10px] text-on-surface-variant">
                               {formatProspectDate(lead.createdAt || lead.criadoEm)}
                             </td>
+                            <td className="py-3 px-4 text-[10px] text-on-surface-variant whitespace-nowrap">
+                              <div>{lead.ultimoEnvioWhatsApp || lead.ultimoContato ? formatProspectDate(lead.ultimoEnvioWhatsApp || lead.ultimoContato) : 'Nunca enviado'}</div>
+                              {bulkStatusLabel(lead.id)}
+                            </td>
                             <td className="py-3 px-4">
                               <div className="flex items-center justify-center gap-1.5">
                                 <button
                                   onClick={() => handleSendManualMessageToLead(lead)}
+                                  disabled={isSendingWhatsApp}
                                   className="p-1.5 hover:bg-primary/10 hover:text-primary text-on-surface-variant rounded-lg transition-all"
                                   title="Enviar Abordagem WhatsApp"
                                 >
@@ -1629,19 +1737,19 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
         <div className="fixed inset-0 z-[100] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="w-full max-w-xl bg-surface-container-lowest rounded-2xl shadow-2xl border border-surface-container-high overflow-hidden">
             <div className="p-5 border-b border-surface-container-high flex items-center justify-between">
-              <div><h3 className="text-base font-black text-on-surface">Enviar mensagem via WhatsApp</h3><p className="text-xs text-on-surface-variant mt-1">Revise o conteúdo antes de confirmar o envio real.</p></div>
-              <button type="button" onClick={() => setSelectedLeadForWhatsApp(null)} className="text-on-surface-variant hover:text-on-surface">✕</button>
+              <div><h3 className="text-base font-black text-on-surface">{isBulkWhatsAppMode ? `Enviar para ${selectedProspectLeadIds.length} clientes` : 'Enviar mensagem via WhatsApp'}</h3><p className="text-xs text-on-surface-variant mt-1">{isBulkWhatsAppMode ? 'A fila enviará uma mensagem por vez, com intervalo de 5 segundos.' : 'Revise o conteúdo antes de confirmar o envio real.'}</p></div>
+              <button type="button" disabled={isSendingWhatsApp} onClick={() => { setSelectedLeadForWhatsApp(null); setIsBulkWhatsAppMode(false); }} className="text-on-surface-variant hover:text-on-surface disabled:opacity-40">✕</button>
             </div>
             <div className="p-5 space-y-4">
               <div className="grid sm:grid-cols-2 gap-3 rounded-xl bg-surface p-4 text-xs">
-                <div><span className="text-on-surface-variant">Empresa</span><p className="font-bold mt-1">{selectedLeadForWhatsApp.empresa || selectedLeadForWhatsApp.nome}</p></div>
-                <div><span className="text-on-surface-variant">Telefone</span><p className="font-bold mt-1">{selectedLeadForWhatsApp.telefone || selectedLeadForWhatsApp.whatsapp}</p></div>
+                <div><span className="text-on-surface-variant">{isBulkWhatsAppMode ? 'Clientes selecionados' : 'Empresa'}</span><p className="font-bold mt-1">{isBulkWhatsAppMode ? selectedProspectLeadIds.length : selectedLeadForWhatsApp.empresa || selectedLeadForWhatsApp.nome}</p></div>
+                <div><span className="text-on-surface-variant">{isBulkWhatsAppMode ? 'Intervalo' : 'Telefone'}</span><p className="font-bold mt-1">{isBulkWhatsAppMode ? '5 segundos' : selectedLeadForWhatsApp.telefone || selectedLeadForWhatsApp.whatsapp}</p></div>
                 <div className="sm:col-span-2"><span className="text-on-surface-variant">Responsável</span><p className="font-bold mt-1">{user.nome || user.email.split('@')[0]}</p></div>
               </div>
-              <div><label className="block text-xs font-bold mb-1.5">Template</label><select value={whatsAppTemplateId} onChange={event => { const id=event.target.value; setWhatsAppTemplateId(id); const template=templates.find(item=>item.id===id); if(template) setWhatsAppMessage(template.body.replace(/\{\{NOME_EMPRESA\}\}/g, selectedLeadForWhatsApp.empresa || selectedLeadForWhatsApp.nome).replace(/\{\{CIDADE\}\}/g, selectedLeadForWhatsApp.cidade || 'sua cidade')); }} className="w-full rounded-xl border border-surface-container-high bg-surface px-3 py-2.5 text-sm"><option value="">Mensagem manual</option>{templates.filter(item=>item.type==='whatsapp').map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+              <div><label className="block text-xs font-bold mb-1.5">Template</label><select value={whatsAppTemplateId} onChange={event => { const id=event.target.value; setWhatsAppTemplateId(id); const template=templates.find(item=>item.id===id); if(template) setWhatsAppMessage(isBulkWhatsAppMode ? template.body : personalizeWhatsAppMessage(template.body, selectedLeadForWhatsApp)); }} className="w-full rounded-xl border border-surface-container-high bg-surface px-3 py-2.5 text-sm"><option value="">Mensagem manual</option>{templates.filter(item=>item.type==='whatsapp').map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
               <div><label className="block text-xs font-bold mb-1.5">Mensagem</label><textarea rows={7} value={whatsAppMessage} onChange={event=>setWhatsAppMessage(event.target.value)} className="w-full rounded-xl border border-surface-container-high bg-surface px-3 py-3 text-sm resize-none" placeholder="Digite a mensagem..." /></div>
             </div>
-            <div className="p-5 border-t border-surface-container-high flex justify-end gap-3"><button type="button" disabled={isSendingWhatsApp} onClick={()=>setSelectedLeadForWhatsApp(null)} className="px-4 py-2 rounded-xl border border-surface-container-high text-xs font-bold">Cancelar</button><button type="button" disabled={isSendingWhatsApp || !whatsAppMessage.trim()} onClick={handleConfirmWhatsAppSend} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold disabled:opacity-50 flex items-center gap-2">{isSendingWhatsApp ? <><Clock size={14} className="animate-spin" /> Enviando...</> : <><Send size={14} /> Enviar mensagem</>}</button></div>
+            <div className="p-5 border-t border-surface-container-high flex justify-end gap-3"><button type="button" disabled={isSendingWhatsApp} onClick={()=>{ setSelectedLeadForWhatsApp(null); setIsBulkWhatsAppMode(false); }} className="px-4 py-2 rounded-xl border border-surface-container-high text-xs font-bold">Cancelar</button><button type="button" disabled={isSendingWhatsApp || !whatsAppMessage.trim()} onClick={handleConfirmWhatsAppSend} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold disabled:opacity-50 flex items-center gap-2">{isSendingWhatsApp ? <><Clock size={14} className="animate-spin" /> {bulkSendProgress ? `Enviando ${bulkSendProgress.current} de ${bulkSendProgress.total}` : 'Enviando...'}</> : <><Send size={14} /> {isBulkWhatsAppMode ? 'Iniciar fila de envios' : 'Enviar mensagem'}</>}</button></div>
           </div>
         </div>
       )}
