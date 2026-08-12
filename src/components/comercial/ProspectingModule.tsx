@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { 
   prospectingService, 
   ProspectResult, 
@@ -107,6 +107,7 @@ export default function ProspectingModule({ user, initialTab = 'buscar', onViewC
   const [isBulkWhatsAppMode, setIsBulkWhatsAppMode] = useState(false);
   const [bulkSendProgress, setBulkSendProgress] = useState<{ current: number; total: number } | null>(null);
   const [bulkSendStatuses, setBulkSendStatuses] = useState<Record<string, { status: 'pending' | 'sending' | 'sent' | 'error'; error?: string }>>({});
+  const [lastSendFilter, setLastSendFilter] = useState<'all' | 'not_sent' | 'sent' | 'recent'>('all');
 
   // Statistics summaries
   const [stats, setStats] = useState({
@@ -629,6 +630,41 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
 
   const hasProspectWhatsApp = (lead: Lead) => Boolean((lead.telefone || lead.whatsapp || '').replace(/\D/g, ''));
 
+  const getLastProspectSend = (lead: Lead) => lead.ultimoEnvioWhatsApp || lead.ultimoContato || null;
+
+  const prospectSendTimestamp = (lead: Lead) => {
+    const value: any = getLastProspectSend(lead);
+    if (!value) return 0;
+    const parsed = typeof value?.toDate === 'function'
+      ? value.toDate()
+      : typeof value?.seconds === 'number'
+        ? new Date(value.seconds * 1000)
+        : new Date(value);
+    return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+  };
+
+  const visibleProspectLeads = useMemo(() => {
+    if (lastSendFilter === 'not_sent') {
+      return prospectLeads.filter(lead => !getLastProspectSend(lead));
+    }
+    if (lastSendFilter === 'sent') {
+      return prospectLeads.filter(lead => Boolean(getLastProspectSend(lead)));
+    }
+    if (lastSendFilter === 'recent') {
+      return [...prospectLeads]
+        .filter(lead => Boolean(getLastProspectSend(lead)))
+        .sort((a, b) => prospectSendTimestamp(b) - prospectSendTimestamp(a));
+    }
+    return prospectLeads;
+  }, [prospectLeads, lastSendFilter]);
+
+  const selectableVisibleProspectLeads = visibleProspectLeads.filter(hasProspectWhatsApp);
+
+  useEffect(() => {
+    const visibleIds = new Set(visibleProspectLeads.map(lead => lead.id));
+    setSelectedProspectLeadIds(current => current.filter(id => visibleIds.has(id)));
+  }, [lastSendFilter]);
+
   const bulkStatusLabel = (leadId: string) => {
     const item = bulkSendStatuses[leadId];
     if (!item) return null;
@@ -990,17 +1026,32 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
               <div className="border border-surface-container-high rounded-xl overflow-hidden bg-surface-container">
                 <div className="p-4 bg-surface border-b border-surface-container-high flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h3 className="text-xs font-extrabold text-on-surface uppercase tracking-wider">Base de Leads Capturados via Google Maps ({prospectLeads.length})</h3>
+                    <h3 className="text-xs font-extrabold text-on-surface uppercase tracking-wider">Base de Leads Capturados via Google Maps ({visibleProspectLeads.length} de {prospectLeads.length})</h3>
                     {bulkSendProgress && <p className="mt-1 text-xs font-bold text-primary">Enviando {bulkSendProgress.current} de {bulkSendProgress.total}</p>}
                   </div>
-                  <button
-                    type="button"
-                    disabled={!selectedProspectLeadIds.length || isSendingWhatsApp}
-                    onClick={handleOpenBulkWhatsAppSend}
-                    className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-[10px] font-black uppercase tracking-wider text-on-primary disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <Send size={14} /> Enviar selecionados ({selectedProspectLeadIds.length})
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="sr-only" htmlFor="prospect-last-send-filter">Filtrar por último envio</label>
+                    <select
+                      id="prospect-last-send-filter"
+                      value={lastSendFilter}
+                      onChange={event => setLastSendFilter(event.target.value as typeof lastSendFilter)}
+                      disabled={isSendingWhatsApp}
+                      className="rounded-lg border border-surface-container-high bg-surface px-3 py-2 text-[10px] font-black uppercase tracking-wider text-on-surface outline-none focus:border-primary"
+                    >
+                      <option value="all">Todos os envios</option>
+                      <option value="not_sent">Não enviados</option>
+                      <option value="sent">Já enviados</option>
+                      <option value="recent">Últimos enviados</option>
+                    </select>
+                    <button
+                      type="button"
+                      disabled={!selectedProspectLeadIds.length || isSendingWhatsApp}
+                      onClick={handleOpenBulkWhatsAppSend}
+                      className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-[10px] font-black uppercase tracking-wider text-on-primary disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <Send size={14} /> Enviar selecionados ({selectedProspectLeadIds.length})
+                    </button>
+                  </div>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs border-collapse">
@@ -1011,8 +1062,8 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
                             type="checkbox"
                             aria-label="Selecionar todos os clientes com WhatsApp"
                             disabled={isSendingWhatsApp}
-                            checked={prospectLeads.some(hasProspectWhatsApp) && prospectLeads.filter(hasProspectWhatsApp).every(lead => selectedProspectLeadIds.includes(lead.id))}
-                            onChange={event => setSelectedProspectLeadIds(event.target.checked ? prospectLeads.filter(hasProspectWhatsApp).map(lead => lead.id) : [])}
+                            checked={selectableVisibleProspectLeads.length > 0 && selectableVisibleProspectLeads.every(lead => selectedProspectLeadIds.includes(lead.id))}
+                            onChange={event => setSelectedProspectLeadIds(event.target.checked ? selectableVisibleProspectLeads.map(lead => lead.id) : [])}
                           />
                         </th>
                         <th className="py-3 px-4">Nome fantasia</th>
@@ -1025,7 +1076,7 @@ Seja simpático, direto, profissional e termine com uma chamada à ação (CTA).
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-surface-container-high font-semibold">
-                      {prospectLeads.map(lead => {
+                      {visibleProspectLeads.map(lead => {
                         return (
                           <tr key={lead.id} className="hover:bg-primary/5 transition-all">
                             <td className="py-3 px-4">
