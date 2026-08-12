@@ -281,6 +281,8 @@ app.post('/api/fiscal/nfse/issue-restricted', protect, async (req: any, res, nex
   let payload: any = null;
   try { payload = JSON.parse(response.body.toString('utf8')); } catch { payload = null; }
   const firstError = Array.isArray(payload?.erros) ? payload.erros[0] : null;
+  const responseText = response.body.toString('utf8').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const serviceUnavailable = response.statusCode === 503 || /service unavailable/i.test(responseText);
   const nfseCompressed = typeof payload?.nfseXmlGZipB64 === 'string' ? payload.nfseXmlGZipB64 : null;
   let authorizedXml: string | null = null;
   if (nfseCompressed) {
@@ -292,8 +294,12 @@ app.post('/api/fiscal/nfse/issue-restricted', protect, async (req: any, res, nex
   const summary = {
     environment: environmentKey, endpoint, dpsId: built.id,
     httpStatus: response.statusCode, result: authorized ? 'AUTORIZADA' : 'REJEITADA',
-    code: firstError?.Codigo || firstError?.codigo || null,
-    message: firstError?.Descricao || firstError?.descricao || (authorized ? `NFS-e autorizada em ${isProduction ? 'Produção Real' : 'Produção Restrita'}.` : 'SEFIN rejeitou ou não autorizou a DPS.'),
+    code: firstError?.Codigo || firstError?.codigo || (serviceUnavailable ? 'SEFIN_SERVICE_UNAVAILABLE' : null),
+    message: firstError?.Descricao || firstError?.descricao || (authorized
+      ? `NFS-e autorizada em ${isProduction ? 'Produção Real' : 'Produção Restrita'}.`
+      : serviceUnavailable
+        ? 'A SEFIN retornou HTTP 503 (serviço temporariamente indisponível). A situação desta DPS deve ser consultada antes de qualquer nova tentativa.'
+        : responseText.slice(0, 500) || 'SEFIN rejeitou ou não autorizou a DPS.'),
     nfseNumber: payload?.numero || payload?.numeroNfse || payload?.nNFSe || parsedNfse?.nfseNumber || null,
     accessKey: payload?.chaveAcesso || null, protocol: payload?.protocolo || payload?.idDps || payload?.idDPS || null,
     xmlStored: !!authorizedXml, danfseAvailable: !!authorizedXml, boletoGenerated: false,
@@ -305,7 +311,7 @@ app.post('/api/fiscal/nfse/issue-restricted', protect, async (req: any, res, nex
     if (recurringBillingId) await req.fiscal.db.collection('faturamentos_recorrentes').doc(recurringBillingId).set({ status: 'AUTORIZADA', nfseNumber: summary.nfseNumber, dpsNumber: built.id, officialAccessKey: summary.accessKey, authorizedAt: FieldValue.serverTimestamp(), authorizedXml: `private://nfse-issues/${built.id}/nfse-autorizada.xml`, danfseReference: summary.accessKey, environment: environmentKey, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
   }
   await writeFiscalAudit(req.fiscal.db, req.fiscal.companyId, req.fiscal.decoded.uid, isProduction ? 'nfse_production_issued_from_form' : 'nfse_restricted_issued_from_form', summary);
-  return res.status(authorized ? response.statusCode : 422).json({ success: authorized, data: summary, ...(authorized ? {} : { code: summary.code || 'SEFIN_REJECTED', error: summary.message }) });
+  return res.status(authorized ? response.statusCode : serviceUnavailable ? 503 : 422).json({ success: authorized, data: summary, ...(authorized ? {} : { code: summary.code || 'SEFIN_REJECTED', error: summary.message }) });
 } catch (error) { next(error); } });
 
 app.post('/api/fiscal/phase3/transmit-first-restricted', protect, async (req: any, res, next) => { try {

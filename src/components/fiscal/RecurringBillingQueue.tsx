@@ -103,7 +103,7 @@ export default function RecurringBillingQueue({ user, contracts, clients, config
         await updateRecurringBilling(billing.id, authorizedItem);
         processedItems.push(authorizedItem); authorizedCount += 1; billedAmount += billing.expectedAmount;
       } catch (error: any) {
-        const inconclusive = /timeout|inconclus/i.test(String(error?.message || ''));
+        const inconclusive = /timeout|inconclus|temporariamente indisponível|HTTP 503/i.test(String(error?.message || '')) || error?.code === 'SEFIN_SERVICE_UNAVAILABLE';
         const xsdDetails = Array.isArray(error?.data?.errors)
           ? error.data.errors.map((item: any) => String(item?.message || '')).filter(Boolean).join(' | ')
           : '';
@@ -112,6 +112,9 @@ export default function RecurringBillingQueue({ user, contracts, clients, config
         await updateRecurringBilling(billing.id, { status: inconclusive ? 'EM_PROCESSAMENTO' : 'REJEITADA', sefinError: { code: failure.code, message: failure.message } });
         failures.push(failure);
         errorCount += 1;
+        // Indisponibilidade/timeout deixa a situação da DPS inconclusiva. Interromper o
+        // lote evita novas transmissões e preserva a idempotência até a conciliação.
+        if (inconclusive) break;
       }
     }
     setBatchSummary({ processed: chosen.length, authorized: authorizedCount, errors: errorCount, billedAmount, items: processedItems, failures });
