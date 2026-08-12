@@ -104,7 +104,11 @@ export default function RecurringBillingQueue({ user, contracts, clients, config
         processedItems.push(authorizedItem); authorizedCount += 1; billedAmount += billing.expectedAmount;
       } catch (error: any) {
         const inconclusive = /timeout|inconclus/i.test(String(error?.message || ''));
-        const failure = { id: billing.id, contractNumber: billing.contractNumber, clientName: billing.clientName, code: error?.code || error?.data?.code || 'FISCAL_ERROR', message: inconclusive ? `INCONCLUSIVO: ${error.message}` : (error?.message || error?.data?.message || 'Falha fiscal sem mensagem retornada.') };
+        const xsdDetails = Array.isArray(error?.data?.errors)
+          ? error.data.errors.map((item: any) => String(item?.message || '')).filter(Boolean).join(' | ')
+          : '';
+        const baseMessage = error?.message || error?.data?.message || 'Falha fiscal sem mensagem retornada.';
+        const failure = { id: billing.id, contractNumber: billing.contractNumber, clientName: billing.clientName, code: error?.code || error?.data?.code || 'FISCAL_ERROR', message: inconclusive ? `INCONCLUSIVO: ${baseMessage}` : (xsdDetails ? `${baseMessage} ${xsdDetails}` : baseMessage) };
         await updateRecurringBilling(billing.id, { status: inconclusive ? 'EM_PROCESSAMENTO' : 'REJEITADA', sefinError: { code: failure.code, message: failure.message } });
         failures.push(failure);
         errorCount += 1;

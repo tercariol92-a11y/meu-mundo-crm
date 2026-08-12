@@ -101,5 +101,5 @@ export async function listRecurringBillings(companyId: string) {
 }
 
 export async function updateRecurringBilling(id: string, data: Partial<FaturamentoRecorrente>) {
-  await updateDoc(doc(db, COLLECTION, id), { ...data, updatedAt: serverTimestamp() });
+  await updateDoc(doc(db, COLLECTION, id), removeUndefined({ ...data, updatedAt: serverTimestamp() }));
 }
