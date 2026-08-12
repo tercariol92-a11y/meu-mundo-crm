@@ -7,6 +7,19 @@ export const fiscalA1SessionRef: { current: SecureA1Session | null } = { current
 
 const digits = (value?: unknown) => String(value || '').replace(/\D/g, '');
 
+export function isValidCnpj(value?: unknown) {
+  const cnpj = digits(value);
+  if (!/^\d{14}$/.test(cnpj) || /^(\d)\1{13}$/.test(cnpj)) return false;
+  const calculateDigit = (base: string, weights: number[]) => {
+    const sum = base.split('').reduce((total, digit, index) => total + Number(digit) * weights[index], 0);
+    const remainder = sum % 11;
+    return remainder < 2 ? 0 : 11 - remainder;
+  };
+  const first = calculateDigit(cnpj.slice(0, 12), [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+  const second = calculateDigit(cnpj.slice(0, 12) + first, [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+  return cnpj.endsWith(`${first}${second}`);
+}
+
 export type NfseDraftIssueOrigin = 'cliente' | 'contrato' | 'configuracao_fiscal';
 export interface NfseDraftIssue {
   key: string;
@@ -22,7 +35,7 @@ export function validateNfseDraftData(args: { client?: Cliente; config?: Configu
   const fiscal = (args.recurring?.fiscalSnapshot || {}) as Record<string, unknown>;
   if (!client) add('client', 'cliente', 'Cliente/tomador não localizado');
   if (client && !String(client.razaoSocial || client.nomeFantasia || '').trim()) add('clientName', 'cliente', 'Razão social do tomador não informada');
-  if (client && digits(client.cnpj || client.pagadorCpfCnpj).length !== 14) add('clientTaxId', 'cliente', 'CNPJ do tomador não informado ou inválido');
+  if (client && !isValidCnpj(client.cnpj || client.pagadorCpfCnpj)) add('clientTaxId', 'cliente', 'CNPJ do tomador inválido: confira os 14 dígitos e os dígitos verificadores');
   if (client && !resolveMunicipalityIbgeCode(client.codigoIbge, client.cidade, client.estado)) add('clientMunicipalityCode', 'cliente', 'Código IBGE do município do tomador ausente ou inválido (deve possuir 7 dígitos)');
   if (client && (!digits(client.cep) || !client.rua || !client.numero || !client.bairro)) add('clientAddress', 'cliente', 'CEP/endereço do tomador incompleto');
   if (!String(args.description || '').trim()) add('serviceDescription', 'contrato', 'Descrição fiscal do serviço ausente');
