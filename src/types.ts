@@ -1374,7 +1374,7 @@ export interface FaturamentoRecorrente {
   nfseNumber?: string;
   officialAccessKey?: string;
   authorizedAt?: string;
-  sefinError?: { code?: string; message: string };
+  sefinError?: { code?: string; message: string } | null;
   authorizedXml?: string;
   danfseReference?: string;
   createdAt?: unknown;

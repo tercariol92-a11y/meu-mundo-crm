@@ -20,7 +20,7 @@ test('same company, contract and competence always produce the same id', () => {
 });
 
 test('missing taker data blocks fiscal emission without transmitting', () => {
-  const billing = buildRecurringBilling('empresa1', contract, { ...client, codigoIbge: '', cnpj: '' }, '2026-08', 'producao', config);
+  const billing = buildRecurringBilling('empresa1', contract, { ...client, codigoIbge: '', cidade: 'Município desconhecido', cnpj: '' }, '2026-08', 'producao', config);
   assert.equal(billing.status, 'PENDENCIA_CADASTRAL');
   assert.ok(billing.missingFields.some(item => item.includes('CNPJ')));
   assert.ok(billing.missingFields.some(item => item.includes('IBGE')));

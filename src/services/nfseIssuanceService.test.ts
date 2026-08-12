@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildValidatedNfseDraft, issueNfseWithValidatedEngine } from './nfseIssuanceService';
+import { resolveMunicipalityIbgeCode } from './municipalityIbge';
 
 const client: any = { id:'c1', razaoSocial:'CLIENTE TESTE', nomeFantasia:'CLIENTE', cnpj:'48088816000145', cep:'80000000', rua:'Rua Teste', numero:'10', bairro:'Centro', cidade:'Curitiba', estado:'PR', codigoIbge:'4106902', emailFinanceiro:'fiscal@example.com' };
 const config: any = { cnpj:'56096046000100', razaoSocial:'MUNDO TECH', inscricaoMunicipal:'13448760', codigoIbge:'4106902', codigoServicoMunicipal:'010701', itemListaServico:'14.01', nbs:'120012000', aliquotaIssPadrao:6 };
@@ -19,4 +20,12 @@ test('manual and recurring issuance share the validated engine payload', async (
 
 test('invalid taker is rejected before reaching the fiscal engine', () => {
   assert.throws(() => buildValidatedNfseDraft({ client:{...client,cnpj:'123'}, config, description:'Serviço', amount:100, competence:'2026-08', issWithheld:false, credentials:{} }), /CNPJ/);
+});
+
+test('known municipality names use official IBGE code and ambiguous values stay blocked', () => {
+  assert.equal(resolveMunicipalityIbgeCode('Curitiba', 'Curitiba', 'PR'), '4106902');
+  assert.equal(resolveMunicipalityIbgeCode('sao paulo', 'São Paulo', 'SP'), '3550308');
+  assert.equal(resolveMunicipalityIbgeCode('parana', 'parana', 'PR'), '');
+  const payload: any = buildValidatedNfseDraft({ client: { ...client, codigoIbge: 'Curitiba' }, config, description:'Manutenção mensal', amount:100, competence:'2026-08', issWithheld:false, credentials:{} });
+  assert.equal(payload.dpsData.taker.municipalityCode, '4106902');
 });

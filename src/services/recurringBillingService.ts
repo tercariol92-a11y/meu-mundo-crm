@@ -2,6 +2,7 @@ import { db } from '../firebase';
 import { Cliente, ConfiguracaoFiscal, ContratoRecorrente, FaturamentoRecorrente } from '../types';
 import { collection, deleteDoc, doc, getDoc, getDocs, serverTimestamp, setDoc, updateDoc } from './resilientFirestoreClient';
 import { validateNfseDraftData } from './nfseIssuanceService';
+import { resolveMunicipalityIbgeCode } from './municipalityIbge';
 
 const COLLECTION = 'faturamentos_recorrentes';
 
@@ -44,8 +45,8 @@ export function buildRecurringBilling(companyId: string, contract: ContratoRecor
     description: fiscal?.descricaoServico || contract.descricaoServico,
     expectedAmount: Number(fiscal?.valorNfse || contract.valorMensal), billingDate: date(contract.diaFaturamento), dueDate: date(contract.diaVencimento),
     status: 'PENDENCIA_CADASTRAL', missingFields: [], environment,
-    takerSnapshot: client ? { razaoSocial: client.razaoSocial || client.nomeFantasia, cpfCnpj: digits(client.cnpj || client.pagadorCpfCnpj), inscricaoMunicipal: client.inscricaoMunicipal || '', endereco: client.rua, numero: client.numero, bairro: client.bairro, cep: digits(client.cep), municipio: client.cidade, uf: client.estado, codigoIbge: client.codigoIbge || '', emailFiscal: client.emailFinanceiro || client.emailPrincipal } : {},
-    fiscalSnapshot: fiscal || {}, generateBoleto: fiscal?.gerarBoleto === true,
+    takerSnapshot: client ? { razaoSocial: client.razaoSocial || client.nomeFantasia, cpfCnpj: digits(client.cnpj || client.pagadorCpfCnpj), inscricaoMunicipal: client.inscricaoMunicipal || '', endereco: client.rua, numero: client.numero, bairro: client.bairro, cep: digits(client.cep), municipio: client.cidade, uf: client.estado, codigoIbge: resolveMunicipalityIbgeCode(client.codigoIbge, client.cidade, client.estado), emailFiscal: client.emailFinanceiro || client.emailPrincipal } : {},
+    fiscalSnapshot: fiscal || {}, generateBoleto: fiscal?.gerarBoleto === true, sefinError: null,
   };
   const validationIssues = validateNfseDraftData({ client, config, description: candidate.description, amount: candidate.expectedAmount, competence, recurring: candidate, issWithheld: fiscal?.issRetido === true });
   candidate.validationIssues = validationIssues;

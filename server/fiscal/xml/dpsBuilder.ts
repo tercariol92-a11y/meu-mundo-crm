@@ -23,6 +23,7 @@ export type MinimalDpsInput = {
   simpleNationalOption: '1' | '2' | '3';
   simpleNationalTaxRegime?: '1' | '2' | '3';
   simpleNationalTotalTaxRate?: string;
+  issRate?: string;
   specialTaxRegime?: string;
   issWithheld?: boolean;
   taker?: {
@@ -75,8 +76,11 @@ export function buildMinimalCuritibaDps(input: MinimalDpsInput) {
   const totalTax = input.simpleNationalOption === '3'
     ? `<pTotTribSN>${xmlEscape(input.simpleNationalTotalTaxRate || '6.00')}</pTotTribSN>`
     : '<indTotTrib>0</indTotTrib>';
+  const issRate = input.issWithheld && input.issRate
+    ? `<pAliq>${xmlEscape(input.issRate)}</pAliq>`
+    : '';
   return {
     id,
-    xml: `<?xml version="1.0" encoding="UTF-8"?><DPS xmlns="${NS}" versao="1.01"><infDPS Id="${id}"><tpAmb>${environmentType}</tpAmb><dhEmi>${xmlEscape(input.issuedAt)}</dhEmi><verAplic>MEUMUNDO-FASE1</verAplic><serie>${input.series}</serie><nDPS>${input.number}</nDPS><dCompet>${xmlEscape(input.competenceDate)}</dCompet><tpEmit>${emitterType}</tpEmit><cLocEmi>4106902</cLocEmi><prest><CNPJ>${cnpj}</CNPJ>${municipalRegistration}${prestadorName}<regTrib><opSimpNac>${input.simpleNationalOption}</opSimpNac>${regAp}<regEspTrib>${xmlEscape(input.specialTaxRegime || '0')}</regEspTrib></regTrib></prest>${taker}<serv><locPrest><cLocPrestacao>4106902</cLocPrestacao></locPrest><cServ><cTribNac>${input.nationalServiceCode}</cTribNac><xDescServ>${xmlEscape(input.serviceDescription)}</xDescServ>${tag('cNBS', input.nbs)}</cServ></serv><valores><vServPrest><vServ>${input.serviceValue}</vServ></vServPrest><trib><tribMun><tribISSQN>1</tribISSQN><tpRetISSQN>${input.issWithheld ? '2' : '1'}</tpRetISSQN></tribMun><totTrib>${totalTax}</totTrib></trib></valores></infDPS></DPS>`,
+    xml: `<?xml version="1.0" encoding="UTF-8"?><DPS xmlns="${NS}" versao="1.01"><infDPS Id="${id}"><tpAmb>${environmentType}</tpAmb><dhEmi>${xmlEscape(input.issuedAt)}</dhEmi><verAplic>MEUMUNDO-FASE1</verAplic><serie>${input.series}</serie><nDPS>${input.number}</nDPS><dCompet>${xmlEscape(input.competenceDate)}</dCompet><tpEmit>${emitterType}</tpEmit><cLocEmi>4106902</cLocEmi><prest><CNPJ>${cnpj}</CNPJ>${municipalRegistration}${prestadorName}<regTrib><opSimpNac>${input.simpleNationalOption}</opSimpNac>${regAp}<regEspTrib>${xmlEscape(input.specialTaxRegime || '0')}</regEspTrib></regTrib></prest>${taker}<serv><locPrest><cLocPrestacao>4106902</cLocPrestacao></locPrest><cServ><cTribNac>${input.nationalServiceCode}</cTribNac><xDescServ>${xmlEscape(input.serviceDescription)}</xDescServ>${tag('cNBS', input.nbs)}</cServ></serv><valores><vServPrest><vServ>${input.serviceValue}</vServ></vServPrest><trib><tribMun><tribISSQN>1</tribISSQN><tpRetISSQN>${input.issWithheld ? '2' : '1'}</tpRetISSQN>${issRate}</tribMun><totTrib>${totalTax}</totTrib></trib></valores></infDPS></DPS>`,
   };
 }

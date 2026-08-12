@@ -1,5 +1,6 @@
 import { Cliente, ConfiguracaoFiscal, FaturamentoRecorrente } from '../types';
 import { fiscalApi } from './fiscalApi';
+import { resolveMunicipalityIbgeCode } from './municipalityIbge';
 
 export type SecureA1Session = Record<string, unknown>;
 export const fiscalA1SessionRef: { current: SecureA1Session | null } = { current: null };
@@ -22,7 +23,7 @@ export function validateNfseDraftData(args: { client?: Cliente; config?: Configu
   if (!client) add('client', 'cliente', 'Cliente/tomador não localizado');
   if (client && !String(client.razaoSocial || client.nomeFantasia || '').trim()) add('clientName', 'cliente', 'Razão social do tomador não informada');
   if (client && digits(client.cnpj || client.pagadorCpfCnpj).length !== 14) add('clientTaxId', 'cliente', 'CNPJ do tomador não informado ou inválido');
-  if (client && !String(client.codigoIbge || '').trim()) add('clientMunicipalityCode', 'cliente', 'Município/IBGE do tomador não informado');
+  if (client && !resolveMunicipalityIbgeCode(client.codigoIbge, client.cidade, client.estado)) add('clientMunicipalityCode', 'cliente', 'Código IBGE do município do tomador ausente ou inválido (deve possuir 7 dígitos)');
   if (client && (!digits(client.cep) || !client.rua || !client.numero || !client.bairro)) add('clientAddress', 'cliente', 'CEP/endereço do tomador incompleto');
   if (!String(args.description || '').trim()) add('serviceDescription', 'contrato', 'Descrição fiscal do serviço ausente');
   if (!(Number(args.amount) > 0)) add('serviceAmount', 'contrato', 'Valor da NFS-e inválido');
@@ -45,6 +46,9 @@ export function buildValidatedNfseDraft(args: { client: Cliente; config: Configu
   if (issues.length) throw Object.assign(new Error(issues[0].label), { code: 'NFSE_DRAFT_INVALID', issues });
   const cnpj = digits(client.cnpj || client.pagadorCpfCnpj);
   const fiscal = (recurring?.fiscalSnapshot || {}) as Record<string, unknown>;
+  const municipalityCode = resolveMunicipalityIbgeCode(client.codigoIbge, client.cidade, client.estado);
+  const fiscalNbs = digits(fiscal.nbs);
+  const nbs = /^\d{9}$/.test(fiscalNbs) ? fiscalNbs : digits(config.nbs);
   const brasiliaNow = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
   return {
     ...args.credentials,
@@ -61,10 +65,10 @@ export function buildValidatedNfseDraft(args: { client: Cliente; config: Configu
       companyName: config.razaoSocial, emitterType: '1', series: '1',
       issuedAt: `${brasiliaNow.slice(0, 19)}-03:00`, competenceDate: `${args.competence.slice(0, 7)}-${String(new Date().getDate()).padStart(2, '0')}`,
       nationalServiceCode: digits(fiscal.codigoServicoMunicipal || config.codigoServicoMunicipal).slice(0, 6),
-      nbs: digits(fiscal.nbs || config.nbs), serviceDescription: args.description.trim(), serviceValue: args.amount.toFixed(2),
+      nbs, serviceDescription: args.description.trim(), serviceValue: args.amount.toFixed(2),
       simpleNationalOption: '3', simpleNationalTaxRegime: '1', specialTaxRegime: '0',
-      simpleNationalTotalTaxRate: Number(fiscal.aliquotaIss || config.aliquotaIssPadrao || 6).toFixed(2), issWithheld: args.issWithheld,
-      taker: { cnpj, name: client.razaoSocial || client.nomeFantasia, municipalityCode: String(client.codigoIbge || ''), postalCode: digits(client.cep), street: client.rua, number: client.numero, district: client.bairro, email: client.emailFinanceiro || client.emailPrincipal },
+      simpleNationalTotalTaxRate: Number(fiscal.aliquotaIss || config.aliquotaIssPadrao || 6).toFixed(2), issRate: Number(fiscal.aliquotaIss || config.aliquotaIssPadrao || 0).toFixed(2), issWithheld: args.issWithheld,
+      taker: { cnpj, name: client.razaoSocial || client.nomeFantasia, municipalityCode, postalCode: digits(client.cep), street: client.rua, number: client.numero, district: client.bairro, email: client.emailFinanceiro || client.emailPrincipal },
     },
   };
 }
