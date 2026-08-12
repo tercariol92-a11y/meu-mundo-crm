@@ -22,6 +22,48 @@ interface FinanceiroContratosRecorrentesProps {
   user: Usuario;
 }
 
+const DEFAULT_FISCAL_DESCRIPTION = 'SERVIÇOS RECORRENTES DE ASSISTÊNCIA TÉCNICA E SUPORTE DE TI.';
+
+const recurringFiscalDefaults = (config: ConfiguracaoFiscal | null, monthlyAmount = 0) => ({
+  descricaoServico: DEFAULT_FISCAL_DESCRIPTION,
+  codigoServicoMunicipal: config?.codigoServicoMunicipal || '',
+  itemLc116: config?.itemListaServico || '',
+  cnae: config?.cnae || '',
+  nbs: config?.nbs || '',
+  aliquotaIss: Number(config?.aliquotaIssPadrao ?? 0),
+  issRetido: false,
+  municipioPrestacao: config?.municipio || '',
+  naturezaOperacao: 'nota de serviço',
+  declaracaoAdicional: '',
+  valorNfse: monthlyAmount,
+  gerarBoleto: false,
+});
+
+const withRecurringFiscalDefaults = (contract: ContratoRecorrente, config: ConfiguracaoFiscal | null): ContratoRecorrente => {
+  const defaults = recurringFiscalDefaults(config, contract.valorMensal);
+  const fiscal = contract.fiscal;
+  return {
+    ...contract,
+    // Todos os contratos recorrentes entram no faturamento fiscal por padrão.
+    // O usuário ainda pode revisar os dados antes da emissão na fila.
+    emitirNfseRecorrente: true,
+    fiscal: {
+      descricaoServico: fiscal?.descricaoServico || contract.descricaoServico || defaults.descricaoServico,
+      codigoServicoMunicipal: fiscal?.codigoServicoMunicipal || defaults.codigoServicoMunicipal,
+      itemLc116: fiscal?.itemLc116 || defaults.itemLc116,
+      cnae: fiscal?.cnae || defaults.cnae,
+      nbs: fiscal?.nbs || defaults.nbs,
+      aliquotaIss: Number(fiscal?.aliquotaIss || defaults.aliquotaIss),
+      issRetido: fiscal?.issRetido === true,
+      municipioPrestacao: fiscal?.municipioPrestacao || defaults.municipioPrestacao,
+      naturezaOperacao: fiscal?.naturezaOperacao || defaults.naturezaOperacao,
+      declaracaoAdicional: fiscal?.declaracaoAdicional || '',
+      valorNfse: Number(fiscal?.valorNfse || contract.valorMensal),
+      gerarBoleto: fiscal?.gerarBoleto === true,
+    },
+  };
+};
+
 export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContratosRecorrentesProps) {
   // Lists state
   const [contratos, setContratos] = useState<ContratoRecorrente[]>([]);
@@ -53,7 +95,7 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
     unidadeId: '',
     unidadeNome: '',
     numeroContrato: '',
-    descricaoServico: 'SERVIÇOS RECORRENTES DE ASSISTÊNCIA TÉCNICA E SUPORTE DE TI.',
+    descricaoServico: DEFAULT_FISCAL_DESCRIPTION,
     valorMensal: 0,
     dataInicio: new Date().toISOString().split('T')[0],
     dataTermino: '',
@@ -66,8 +108,8 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
     reajusteAnual: false,
     indiceReajuste: 'IGPM' as string,
     itens: [] as ContratoItem[],
-    emitirNfseRecorrente: false,
-    fiscal: { descricaoServico: 'SERVIÇOS RECORRENTES DE ASSISTÊNCIA TÉCNICA E SUPORTE DE TI.', codigoServicoMunicipal: '', itemLc116: '', cnae: '', nbs: '', aliquotaIss: 0, issRetido: false, municipioPrestacao: '', naturezaOperacao: '', declaracaoAdicional: '', valorNfse: 0, gerarBoleto: false }
+    emitirNfseRecorrente: true,
+    fiscal: recurringFiscalDefaults(null)
   });
 
   // Toggle to synchronize contract monthly total with the sum of its items
@@ -117,11 +159,13 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
       const cls = await databaseService.getClientes();
       setClientes(cls || []);
 
+      const config = await databaseService.getConfiguracaoFiscal();
       const snap = await getDocs(collection(db, 'contratos'));
-      const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as ContratoRecorrente));
+      const originalList = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as ContratoRecorrente));
+      const list = originalList.map(contract => withRecurringFiscalDefaults(contract, config));
       setContratos(list);
       setBillingHistory(await listRecurringBillings(user.companyId || 'default'));
-      setFiscalConfig(await databaseService.getConfiguracaoFiscal());
+      setFiscalConfig(config);
       const environment = await fiscalApi.getEnvironment();
       setFiscalEnvironment(environment.environment === 'producao' ? 'producao' : 'producao_restrita');
     } catch (err: any) {
@@ -298,7 +342,7 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
       unidadeId: '',
       unidadeNome: '',
       numeroContrato: `CTR-${Math.floor(Math.random() * 9000) + 1000}`,
-      descricaoServico: 'SERVIÇOS RECORRENTES DE ASSISTÊNCIA TÉCNICA E SUPORTE DE TI.',
+      descricaoServico: DEFAULT_FISCAL_DESCRIPTION,
       valorMensal: 0,
       dataInicio: new Date().toISOString().split('T')[0],
       dataTermino: '',
@@ -311,8 +355,8 @@ export default function FinanceiroContratosRecorrentes({ user }: FinanceiroContr
       reajusteAnual: false,
       indiceReajuste: 'IGPM',
       itens: [],
-      emitirNfseRecorrente: false,
-      fiscal: { descricaoServico: 'SERVIÇOS RECORRENTES DE ASSISTÊNCIA TÉCNICA E SUPORTE DE TI.', codigoServicoMunicipal: '', itemLc116: '', cnae: '', nbs: '', aliquotaIss: 0, issRetido: false, municipioPrestacao: '', naturezaOperacao: '', declaracaoAdicional: '', valorNfse: 0, gerarBoleto: false }
+      emitirNfseRecorrente: true,
+      fiscal: recurringFiscalDefaults(fiscalConfig)
     });
     setSyncValueWithItens(true);
     setIsDrawerOpen(true);
