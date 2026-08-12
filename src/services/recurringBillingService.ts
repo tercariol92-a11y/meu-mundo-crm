@@ -8,6 +8,15 @@ const COLLECTION = 'faturamentos_recorrentes';
 const digits = (value?: string) => String(value || '').replace(/\D/g, '');
 const safeId = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '_');
 const periodStep: Record<ContratoRecorrente['tipoCobranca'], number> = { Mensal: 1, Bimestral: 2, Trimestral: 3, Semestral: 6, Anual: 12 };
+const removeUndefined = <T>(value: T): T => {
+  if (Array.isArray(value)) return value.map(item => removeUndefined(item)) as T;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .map(([key, item]) => [key, removeUndefined(item)])) as T;
+  }
+  return value;
+};
 
 export function recurringBillingLogicalKey(companyId: string, contractId: string, competence: string, installment = 1) {
   return `${safeId(companyId)}__${safeId(contractId)}__${competence}__${installment}`;
@@ -47,26 +56,33 @@ export function buildRecurringBilling(companyId: string, contract: ContratoRecor
 
 export async function generateRecurringBillings(companyId: string, contracts: ContratoRecorrente[], clients: Cliente[], competence: string, environment: 'producao' | 'producao_restrita', config?: ConfiguracaoFiscal | null) {
   const generated: FaturamentoRecorrente[] = [];
+  const generationErrors: string[] = [];
   const officialContractIds = new Set(contracts.map(contract => contract.id));
   const currentBillings = (await getDocs(collection(db, COLLECTION))).docs.map(item => ({ id: item.id, ...item.data() } as FaturamentoRecorrente));
   for (const billing of currentBillings.filter(item => item.companyId === companyId && !officialContractIds.has(item.contractId) && ['PENDENTE', 'PENDENCIA_CADASTRAL', 'PRONTO_PARA_EMITIR', 'REJEITADA'].includes(item.status))) {
     await deleteDoc(doc(db, COLLECTION, billing.id));
   }
   for (const contract of contracts.filter(item => contractIsDue(item, competence))) {
-    const candidate = buildRecurringBilling(companyId, contract, clients.find(client => client.id === contract.clienteId), competence, environment, config);
-    const ref = doc(db, COLLECTION, candidate.id);
-    const existing = await getDoc(ref);
-    if (!existing.exists()) {
-      await setDoc(ref, { ...candidate, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
-      generated.push(candidate);
-    } else {
-      const current = { id: existing.id, ...existing.data() } as FaturamentoRecorrente;
-      if (!['AUTORIZADA', 'CANCELADA', 'EM_PROCESSAMENTO'].includes(current.status)) {
-        await setDoc(ref, { ...candidate, createdAt: current.createdAt || serverTimestamp(), updatedAt: serverTimestamp() }, { merge: true });
-        generated.push({ ...current, ...candidate });
-      } else generated.push(current);
+    try {
+      const candidate = buildRecurringBilling(companyId, contract, clients.find(client => client.id === contract.clienteId), competence, environment, config);
+      const ref = doc(db, COLLECTION, candidate.id);
+      const existing = await getDoc(ref);
+      if (!existing.exists()) {
+        await setDoc(ref, removeUndefined({ ...candidate, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }));
+        generated.push(candidate);
+      } else {
+        const current = { id: existing.id, ...existing.data() } as FaturamentoRecorrente;
+        if (!['AUTORIZADA', 'CANCELADA', 'EM_PROCESSAMENTO'].includes(current.status)) {
+          await setDoc(ref, removeUndefined({ ...candidate, createdAt: current.createdAt || serverTimestamp(), updatedAt: serverTimestamp() }), { merge: true });
+          generated.push({ ...current, ...candidate });
+        } else generated.push(current);
+      }
+    } catch (error) {
+      console.error(`Falha ao preparar faturamento do contrato ${contract.numeroContrato}:`, error);
+      generationErrors.push(contract.numeroContrato || contract.id);
     }
   }
+  if (!generated.length && generationErrors.length) throw new Error(`Nenhum contrato pôde ser preparado. Falha em: ${generationErrors.slice(0, 5).join(', ')}${generationErrors.length > 5 ? '…' : ''}`);
   return generated;
 }
 

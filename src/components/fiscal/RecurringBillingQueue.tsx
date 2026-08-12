@@ -32,6 +32,10 @@ export default function RecurringBillingQueue({ user, contracts, clients, config
     try {
       await generateRecurringBillings(companyId, contracts, clients, competence, environment, configDraft || config);
       setItems((await listRecurringBillings(companyId)).filter(item => item.competence === competence && contracts.some(contract => contract.id === item.contractId)));
+      setMessage('');
+    } catch (error) {
+      console.error('Falha ao carregar fila de faturamento recorrente:', error);
+      setMessage(error instanceof Error ? `Não foi possível carregar os contratos para faturar: ${error.message}` : 'Não foi possível carregar os contratos para faturar.');
     } finally { setLoading(false); }
   };
   useEffect(() => { void refresh(); }, [companyId, competence, contracts.length, clients.length, environment, config?.updatedAt]);
