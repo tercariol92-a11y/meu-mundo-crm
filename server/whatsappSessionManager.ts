@@ -1,4 +1,4 @@
-import makeWASocket, { Browsers, DisconnectReason, WASocket, downloadMediaMessage, fetchLatestWaWebVersion, proto, useMultiFileAuthState } from '@whiskeysockets/baileys';
+import makeWASocket, { Browsers, DisconnectReason, WASocket, downloadMediaMessage, fetchLatestBaileysVersion, proto, useMultiFileAuthState } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import QRCode from 'qrcode';
@@ -474,9 +474,9 @@ export async function connectWhatsApp(uid:string,force=false,resetCredentials=fa
   await fs.promises.mkdir(s.authDirectory,{recursive:true});
   console.log('[WHATSAPP SESSION ACTIVE]',{firebaseUid:uid,sessionId:s.sessionId,connectedPhone:''});
   const auth=await useMultiFileAuthState(s.authDirectory);
-  let version:Awaited<ReturnType<typeof fetchLatestWaWebVersion>>['version']|undefined;
-  try{version=(await fetchLatestWaWebVersion({signal:AbortSignal.timeout(15_000)})).version}catch(error){console.warn('[WHATSAPP VERSION FALLBACK]',{firebaseUid:uid,error:error instanceof Error?error.message:'falha desconhecida'})}
-  const socket=makeWASocket({...version?{version}:{},auth:auth.state,logger,browser:Browsers.macOS('Desktop'),printQRInTerminal:false,syncFullHistory:true,markOnlineOnConnect:false,shouldSyncHistoryMessage:()=>true});s.socket=socket;
+  const versionResult=await fetchLatestBaileysVersion({signal:AbortSignal.timeout(15_000)});
+  if(!versionResult.isLatest)console.warn('[WHATSAPP VERSION FALLBACK]',{firebaseUid:uid,error:versionResult.error instanceof Error?versionResult.error.message:'versão local da biblioteca'});
+  const socket=makeWASocket({version:versionResult.version,auth:auth.state,logger,browser:Browsers.macOS('Chrome'),printQRInTerminal:false,syncFullHistory:true,markOnlineOnConnect:false,shouldSyncHistoryMessage:()=>true});s.socket=socket;
   s.connectTimeoutTimer=setTimeout(()=>{
     if(!isCurrentSession(uid,s)||s.status!=='connecting')return;
     try{s.socket?.ev.removeAllListeners();s.socket?.end(undefined)}catch{}
