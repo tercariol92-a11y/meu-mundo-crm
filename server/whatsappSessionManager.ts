@@ -105,6 +105,109 @@ function timestampMillis(value: any): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function whatsappTimestampMillis(value: any): number {
+  if (typeof value === 'number') return value < 10_000_000_000 ? value * 1000 : value;
+  if (typeof value === 'bigint') return Number(value) * 1000;
+  if (value && typeof value.toNumber === 'function') return value.toNumber() * 1000;
+  const numeric = Number(value || 0);
+  return Number.isFinite(numeric) && numeric > 0 ? (numeric < 10_000_000_000 ? numeric * 1000 : numeric) : Date.now();
+}
+
+/**
+ * Persists history without running the live-message side effects (unread
+ * counters, satisfaction surveys, response-time metrics or notifications).
+ */
+async function saveHistoricalMessage(s: WhatsAppSession, msg: any) {
+  const jid = String(msg?.key?.remoteJid || '');
+  if (!jid || jid === 'status@broadcast' || jid.includes('newsletter')) return false;
+  const extracted = extract(msg?.message);
+  const messageId = String(msg?.key?.id || '');
+  if (!extracted || !messageId) return false;
+  const occurredAtMs = whatsappTimestampMillis(msg.messageTimestamp);
+  const occurredAt = new Date(occurredAtMs);
+  const common = {
+    messageId, metaMessageId: messageId, body: extracted.body, mensagem: extracted.body,
+    type: extracted.type, direction: msg.key.fromMe ? 'out' : 'in', fromMe: Boolean(msg.key.fromMe),
+    status: msg.key.fromMe ? 'sent' : 'received', ownerUserId: s.userId, firebaseUid: s.userId,
+    whatsappOwnerUserId: s.userId, whatsappSessionId: s.sessionId, sessionId: s.sessionId,
+    connectedPhone: s.phone, sessionPhone: s.phone, remoteJid: jid, jid, chatId: jid,
+    participantJid: String(msg.key.participant || msg.participant || ''),
+    originalMessageTimestampMs: occurredAtMs, timestamp: occurredAt, createdAt: occurredAt,
+    importedFromWhatsAppHistory: true, historyImportedAt: FieldValue.serverTimestamp(),
+    // Historical media is intentionally not downloaded in bulk. The record
+    // remains visible and can be hydrated separately without exhausting storage.
+    ...(extracted.type !== 'text' ? { mediaStatus: 'history_metadata_only' } : {})
+  };
+
+  if (jid.endsWith('@g.us')) {
+    const groupId = groupDocId(s.sessionId, jid);
+    const groupRef = db.collection('whatsapp_groups').doc(groupId);
+    const messageRef = groupRef.collection('messages').doc(messageId);
+    if ((await messageRef.get()).exists) return false;
+    await messageRef.set({ ...common, groupId, isGroup: true });
+    const groupSnap = await groupRef.get();
+    if (!groupSnap.exists) {
+      await groupRef.set({
+        firebaseUid: s.userId, ownerUserId: s.userId, whatsappSessionId: s.sessionId,
+        sessionId: s.sessionId, connectedPhone: s.phone, groupId, groupJid: jid,
+        remoteJid: jid, name: msg.pushName || 'Grupo WhatsApp', subject: msg.pushName || 'Grupo WhatsApp',
+        isGroup: true, lastMessage: extracted.body, lastMessageAt: occurredAt,
+        lastMessageId: messageId, unreadCount: 0, importedFromWhatsAppHistory: true,
+        updatedAt: FieldValue.serverTimestamp()
+      });
+    }
+    return true;
+  }
+
+  const rawJid = jid.endsWith('@lid') ? String(msg.key.remoteJidAlt || '') : jid;
+  if (!rawJid.endsWith('@s.whatsapp.net')) return false;
+  const phone = phoneOf(rawJid);
+  if (!phone) return false;
+  const leads = db.collection('leads');
+  const ownedLead = await leads.where('whatsappSessionId', '==', s.sessionId).where('telefone', '==', phone).limit(1).get();
+  const leadRef = ownedLead.empty ? leads.doc() : ownedLead.docs[0].ref;
+  const leadSnap = await leadRef.get();
+  const messageRef = leadRef.collection('messages').doc(messageId);
+  if ((await messageRef.get()).exists) return false;
+  await messageRef.set({ ...common, telefone: phone, phone, remoteJid: rawJid, jid: rawJid, chatId: rawJid });
+  if (!leadSnap.exists) {
+    const ownerData = await owner(s.userId);
+    await leadRef.set({
+      nome: msg.pushName || phone, telefone: phone, phone, whatsapp: phone, channel: 'whatsapp_qr',
+      ownerUserId: s.userId, ownerUserName: ownerData.name, ownerUserEmail: ownerData.email,
+      firebaseUid: s.userId, whatsappOwnerUserId: s.userId, whatsappSessionId: s.sessionId,
+      sessionId: s.sessionId, connectedPhone: s.phone, sessionPhone: s.phone, jid: rawJid, chatId: rawJid,
+      assignedUserId: s.userId, assignedUserName: ownerData.name, ultimaMensagem: extracted.body,
+      lastMessage: extracted.body, lastMessageAt: occurredAt, lastMessageId: messageId,
+      status: 'Novo', unreadCount: 0, importedFromWhatsAppHistory: true,
+      createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp()
+    });
+  }
+  return true;
+}
+
+async function importWhatsAppHistory(s: WhatsAppSession, messages: any[], progress?: number, isLatest?: boolean) {
+  if (!isCurrentSession(s.userId, s)) return;
+  // During pairing Baileys may deliver history before connection.open changes
+  // the pending session id to the definitive phone-scoped id.
+  if (s.status !== 'connected' || !s.phone) {
+    setTimeout(() => void importWhatsAppHistory(s, messages, progress, isLatest), 1000);
+    return;
+  }
+  let imported = 0;
+  let ignored = 0;
+  for (const message of messages) {
+    try { (await saveHistoricalMessage(s, message)) ? imported++ : ignored++; }
+    catch (error) { ignored++; console.error('[WHATSAPP HISTORY MESSAGE ERROR]', { firebaseUid: s.userId, messageId: message?.key?.id || '', error: error instanceof Error ? error.message : 'falha desconhecida' }); }
+  }
+  await db.collection('whatsapp_sessions').doc(s.userId).set({
+    historySyncStatus: isLatest ? 'complete' : 'syncing', historySyncProgress: Number(progress || 0),
+    historyMessagesImported: FieldValue.increment(imported), historyMessagesIgnored: FieldValue.increment(ignored),
+    historyLastBatchAt: FieldValue.serverTimestamp(), ...(isLatest ? { historySyncedAt: FieldValue.serverTimestamp() } : {})
+  }, { merge: true });
+  console.log('[WHATSAPP HISTORY SYNC]', { firebaseUid: s.userId, sessionId: s.sessionId, imported, ignored, progress, isLatest });
+}
+
 async function refreshContactAvatar(s: WhatsAppSession, msg: any, phone: string, leadData: any) {
   if (msg.key.fromMe || !s.socket) return {};
   const updatedAt = timestampMillis(leadData?.profilePictureUpdatedAt);
@@ -372,8 +475,13 @@ export async function connectWhatsApp(uid:string,force=false,resetCredentials=fa
   const auth=await useMultiFileAuthState(s.authDirectory);
   let version:Awaited<ReturnType<typeof fetchLatestWaWebVersion>>['version']|undefined;
   try{version=(await fetchLatestWaWebVersion({signal:AbortSignal.timeout(15_000)})).version}catch(error){console.warn('[WHATSAPP VERSION FALLBACK]',{firebaseUid:uid,error:error instanceof Error?error.message:'falha desconhecida'})}
-  const socket=makeWASocket({...version?{version}:{},auth:auth.state,logger,browser:Browsers.macOS('Chrome'),printQRInTerminal:false});s.socket=socket;
+  const socket=makeWASocket({...version?{version}:{},auth:auth.state,logger,browser:Browsers.macOS('Desktop'),printQRInTerminal:false,syncFullHistory:true,markOnlineOnConnect:false,shouldSyncHistoryMessage:()=>true});s.socket=socket;
   socket.ev.on('creds.update',auth.saveCreds);
+  socket.ev.on('messaging-history.set',event=>{
+    if(!isCurrentSession(uid,s))return;
+    void importWhatsAppHistory(s,event.messages||[],event.progress,event.isLatest)
+      .catch(error=>console.error('[WHATSAPP HISTORY SYNC ERROR]',{firebaseUid:uid,error:error instanceof Error?error.message:'falha desconhecida'}));
+  });
   socket.ev.on('messages.upsert',async e=>{if(e.type!=='notify'||!isCurrentSession(uid,s))return;for(const m of e.messages)await onSessionMessage(s,m).catch(err=>console.error(`[WA ${uid}] mensagem:`,err?.message))});
   socket.ev.on('connection.update',async u=>{
     if(!isCurrentSession(uid,s))return;

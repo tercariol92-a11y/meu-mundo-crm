@@ -14,7 +14,8 @@ import {
   setDoc,
   serverTimestamp,
   getDocFromServer,
-  limit
+  limit,
+  startAfter
 } from './resilientFirestoreClient';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { 
@@ -1888,18 +1889,20 @@ export const databaseService = {
     }
   },
 
-  onMessagesChange(leadId: string, activeSessionId: string, callback: (messages: ChatMessage[]) => void) {
+  onMessagesChange(leadId: string, activeSessionId: string, callback: (messages: ChatMessage[]) => void, pageSize = 50) {
     if (!leadId || !activeSessionId) { callback([]); return () => {}; }
     
     // First, check if leadId is a normalized phone, if so, we should handle it
     // But usually leadId is the document ID passed from the list
     const q = query(
-      collection(db, 'leads', leadId, 'messages')
+      collection(db, 'leads', leadId, 'messages'),
+      orderBy('createdAt', 'desc'),
+      limit(pageSize)
     );
     
     return onSnapshot(q, (snap) => {
       const messages = snap.docs.map(mapDoc).filter((message:any)=>message.whatsappSessionId===activeSessionId||message.sessionId===activeSessionId) as ChatMessage[];
-      // Sort in JS manually to provide full history in order
+      // Firestore returns the newest page first; the chat renders oldest -> newest.
       messages.sort((a, b) => {
         const timeA = a.createdAt ? new Date(a.createdAt).getTime() : (a.timestamp ? new Date(a.timestamp).getTime() : Date.now());
         const timeB = b.createdAt ? new Date(b.createdAt).getTime() : (b.timestamp ? new Date(b.timestamp).getTime() : Date.now());
@@ -1911,9 +1914,23 @@ export const databaseService = {
     });
   },
 
-  onGroupMessagesChange(groupId: string, activeSessionId: string, callback: (messages: ChatMessage[]) => void) {
+  async getOlderMessages(leadId: string, activeSessionId: string, before: any, pageSize = 50) {
+    if (!leadId || !activeSessionId || !before) return [] as ChatMessage[];
+    const q = query(
+      collection(db, 'leads', leadId, 'messages'),
+      orderBy('createdAt', 'desc'),
+      startAfter(new Date(before)),
+      limit(pageSize)
+    );
+    const snap = await getDocs(q);
+    const messages = snap.docs.map(mapDoc).filter((message:any)=>message.whatsappSessionId===activeSessionId||message.sessionId===activeSessionId) as ChatMessage[];
+    messages.sort((a, b) => new Date(a.createdAt || a.timestamp || 0).getTime() - new Date(b.createdAt || b.timestamp || 0).getTime());
+    return messages;
+  },
+
+  onGroupMessagesChange(groupId: string, activeSessionId: string, callback: (messages: ChatMessage[]) => void, pageSize = 50) {
     if (!groupId || !activeSessionId) { callback([]); return () => {}; }
-    return onSnapshot(query(collection(db, 'whatsapp_groups', groupId, 'messages')), (snap) => {
+    return onSnapshot(query(collection(db, 'whatsapp_groups', groupId, 'messages'), orderBy('createdAt', 'desc'), limit(pageSize)), (snap) => {
       const messages = snap.docs.map(mapDoc).filter((message:any)=>message.whatsappSessionId===activeSessionId||message.sessionId===activeSessionId) as ChatMessage[];
       const millis = (value: any) => value?.toMillis?.() || value?.toDate?.()?.getTime?.() || new Date(value || 0).getTime() || 0;
       messages.sort((a, b) => {
@@ -1923,6 +1940,19 @@ export const databaseService = {
       });
       callback(messages);
     }, (error) => handleFirestoreError(error, OperationType.LIST, `whatsapp_groups/${groupId}/messages`));
+  },
+
+  async getOlderGroupMessages(groupId: string, activeSessionId: string, before: any, pageSize = 50) {
+    if (!groupId || !activeSessionId || !before) return [] as ChatMessage[];
+    const snap = await getDocs(query(
+      collection(db, 'whatsapp_groups', groupId, 'messages'),
+      orderBy('createdAt', 'desc'),
+      startAfter(new Date(before)),
+      limit(pageSize)
+    ));
+    const messages = snap.docs.map(mapDoc).filter((message:any)=>message.whatsappSessionId===activeSessionId||message.sessionId===activeSessionId) as ChatMessage[];
+    messages.sort((a, b) => new Date(a.createdAt || a.timestamp || 0).getTime() - new Date(b.createdAt || b.timestamp || 0).getTime());
+    return messages;
   },
 
   async saveWhatsAppMessage(message: Omit<ChatMessage, 'id' | 'timestamp'>) {

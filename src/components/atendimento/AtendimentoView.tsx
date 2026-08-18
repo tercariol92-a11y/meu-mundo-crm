@@ -223,6 +223,8 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
     sessionStorage.removeItem('atendimento:openLeadId');
   }, [conversations]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [hasOlderMessages, setHasOlderMessages] = useState(true);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const [selectedClient, setSelectedClient] = useState<Cliente | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [messageText, setMessageText] = useState('');
@@ -231,6 +233,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
   const [sessionAvatarUrls, setSessionAvatarUrls] = useState<Record<string, string>>({});
   const [users, setUsers] = useState<Usuario[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const shouldStickToBottomRef = useRef(true);
   const conversationSnapshotReady = useRef(false);
   const previousUnread = useRef(new Map<string, number>());
   const notifiedEvents = useRef(new Set<string>());
@@ -548,17 +551,18 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
     }
   }, [selectedConversation]);
 
-  // Auto-scroll to bottom quando messages change
+  // Keep the operator at the bottom for new live messages, but never jump down
+  // while an older page is being prepended.
   useEffect(() => {
-    if (scrollRef.current) {
+    if (scrollRef.current && shouldStickToBottomRef.current && !loadingOlderMessages) {
       setTimeout(() => {
         scrollRef.current?.scrollTo({
           top: scrollRef.current.scrollHeight,
-          behavior: 'smooth'
+          behavior: 'auto'
         });
       }, 100);
     }
-  }, [messages]);
+  }, [messages, loadingOlderMessages]);
 
   const getStatusBadge = (status: ConversationStatus) => {
     const configs: Record<ConversationStatus, { label: string, color: string }> = {
@@ -583,16 +587,52 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
 
   useEffect(() => {
     if (selectedConversation) {
+      setMessages([]);
+      setHasOlderMessages(true);
+      shouldStickToBottomRef.current = true;
+      const mergeLatestPage = (data: ChatMessage[]) => setMessages(previous => {
+        const byId = new Map(previous.map(message => [message.id, message]));
+        data.forEach(message => byId.set(message.id, message));
+        return [...byId.values()].sort((a, b) => (safeDate(a.createdAt || a.timestamp)?.getTime() || 0) - (safeDate(b.createdAt || b.timestamp)?.getTime() || 0));
+      });
       const unsubscribe = selectedConversation.isGroup && selectedConversation.groupId
-        ? databaseService.onGroupMessagesChange(selectedConversation.groupId, activeSessionId, (data) => setMessages(data))
+        ? databaseService.onGroupMessagesChange(selectedConversation.groupId, activeSessionId, mergeLatestPage)
         : databaseService.onMessagesChange(selectedConversation.leadId || selectedConversation.id, activeSessionId, (data) => {
-        setMessages(data);
+        mergeLatestPage(data);
       });
       return () => unsubscribe();
     } else {
       setMessages([]);
     }
   }, [selectedConversation, activeSessionId]);
+
+  const loadOlderMessages = useCallback(async () => {
+    if (!selectedConversation || loadingOlderMessages || !hasOlderMessages || messages.length === 0) return;
+    const container = scrollRef.current;
+    const previousHeight = container?.scrollHeight || 0;
+    const oldest = messages[0];
+    const cursor = oldest.createdAt || oldest.timestamp;
+    if (!cursor) { setHasOlderMessages(false); return; }
+    setLoadingOlderMessages(true);
+    shouldStickToBottomRef.current = false;
+    try {
+      const older = selectedConversation.isGroup && selectedConversation.groupId
+        ? await databaseService.getOlderGroupMessages(selectedConversation.groupId, activeSessionId, cursor)
+        : await databaseService.getOlderMessages(selectedConversation.leadId || selectedConversation.id, activeSessionId, cursor);
+      setHasOlderMessages(older.length === 50);
+      setMessages(current => {
+        const byId = new Map([...older, ...current].map(message => [message.id, message]));
+        return [...byId.values()].sort((a, b) => (safeDate(a.createdAt || a.timestamp)?.getTime() || 0) - (safeDate(b.createdAt || b.timestamp)?.getTime() || 0));
+      });
+      requestAnimationFrame(() => {
+        if (container) container.scrollTop = container.scrollHeight - previousHeight;
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Não foi possível carregar mensagens anteriores.');
+    } finally {
+      setLoadingOlderMessages(false);
+    }
+  }, [selectedConversation, loadingOlderMessages, hasOlderMessages, messages, activeSessionId]);
 
   useEffect(() => {
     if (selectedId && conversations.length > 0) {
@@ -952,19 +992,38 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
     setShowShareMenu(false);
   };
 
+  const selectAttachmentFile = (file: File) => {
+    setSelectedFile(file);
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = (event) => setFilePreview(event.target?.result as string);
+      reader.readAsDataURL(file);
+    } else {
+      setFilePreview(null);
+    }
+    setShowAttachMenu(false);
+  };
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setSelectedFile(file);
-      if (file.type.startsWith('image/')) {
-        const reader = new FileReader();
-        reader.onload = (e) => setFilePreview(e.target?.result as string);
-        reader.readAsDataURL(file);
-      } else {
-        setFilePreview(null);
-      }
-      setShowAttachMenu(false);
-    }
+    if (file) selectAttachmentFile(file);
+  };
+
+  const handleMessagePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const imageItem = Array.from(event.clipboardData.items).find(item => item.kind === 'file' && item.type.startsWith('image/'));
+    if (!imageItem) return; // Mantém o comportamento nativo para texto e outros conteúdos.
+
+    const clipboardBlob = imageItem.getAsFile();
+    if (!clipboardBlob) return;
+
+    event.preventDefault();
+    const extension = imageItem.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+    const pastedImage = new File(
+      [clipboardBlob],
+      `imagem-colada-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`,
+      { type: imageItem.type || clipboardBlob.type || 'image/png', lastModified: Date.now() },
+    );
+    selectAttachmentFile(pastedImage);
   };
 
   const handleSendMedia = async () => {
@@ -1439,6 +1498,11 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
 
             <div 
               ref={scrollRef}
+              onScroll={event => {
+                const element = event.currentTarget;
+                shouldStickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+                if (element.scrollTop < 80) void loadOlderMessages();
+              }}
               className="flex-1 overflow-y-auto px-10 py-8 space-y-4 relative custom-scrollbar bg-fixed"
               style={{ 
                 backgroundImage: 'url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png")',
@@ -1448,6 +1512,18 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                 opacity: 0.95
               }}
             >
+              {messages.length > 0 && (
+                <div className="sticky top-0 z-10 flex justify-center pointer-events-none">
+                  <button
+                    type="button"
+                    onClick={() => void loadOlderMessages()}
+                    disabled={!hasOlderMessages || loadingOlderMessages}
+                    className="pointer-events-auto rounded-full bg-white/95 px-4 py-1.5 text-[10px] font-black uppercase tracking-wider text-[#54656f] shadow disabled:opacity-60"
+                  >
+                    {loadingOlderMessages ? 'Carregando histórico...' : hasOlderMessages ? 'Carregar mensagens anteriores' : 'Início do histórico disponível'}
+                  </button>
+                </div>
+              )}
               {messages.map((msg, idx) => {
                 const isOutbound = 
                   msg.fromMe === true || 
@@ -1725,6 +1801,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                     className="w-full bg-white border-none rounded-2xl px-5 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary/20 shadow-sm disabled:cursor-not-allowed resize-none custom-scrollbar max-h-32 transition-all"
                     value={messageText}
                     onChange={e => setMessageText(e.target.value)}
+                    onPaste={handleMessagePaste}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();

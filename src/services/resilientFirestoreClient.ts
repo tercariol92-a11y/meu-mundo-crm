@@ -14,7 +14,8 @@ import {
   setDoc as fb_setDoc,
   serverTimestamp,
   getDocFromServer,
-  limit as fb_limit
+  limit as fb_limit,
+  startAfter as fb_startAfter
 } from 'firebase/firestore';
 import axios from 'axios';
 
@@ -71,6 +72,12 @@ export function orderBy(field: string, direction: any = 'asc') {
 export function limit(n: number) {
   const realC = fb_limit(n);
   (realC as any)._meta = { type: 'limit', limit: n };
+  return realC;
+}
+
+export function startAfter(...values: any[]) {
+  const realC = fb_startAfter(...values);
+  (realC as any)._meta = { type: 'startAfter', values };
   return realC;
 }
 
