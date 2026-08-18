@@ -452,6 +452,8 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
   const [error, setError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isSendingMedia, setIsSendingMedia] = useState(false);
+  const [isSendingText, setIsSendingText] = useState(false);
+  const textSendInFlightRef = useRef(false);
   const [filePreview, setFilePreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -650,6 +652,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (textSendInFlightRef.current) return;
     
     if (!selectedId || !selectedConversation) {
       setError('Nenhuma conversa selecionada');
@@ -676,6 +679,9 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
     const { attendantName, attendantId, attendantEmail } = getAttendantIdentity(user);
 
     try {
+      textSendInFlightRef.current = true;
+      setIsSendingText(true);
+      setError(null);
       const res = await whatsappService.sendMessage(telefoneWhatsApp, messageTextTrim, attendantName, {
         attendantId,
         attendantEmail,
@@ -687,12 +693,38 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
       if (!res?.success || !res?.messageId || res?.status !== 'sent') {
         throw new Error('O Baileys não confirmou o envio real da mensagem.');
       }
+      // Não é otimista: a mensagem entra na tela somente após o Baileys
+      // devolver o identificador real. O snapshot do Firestore apenas a consolida.
+      const confirmedAt = new Date();
+      setMessages(previous => {
+        if (previous.some(message => message.id === res.messageId)) return previous;
+        return [...previous, {
+          id: res.messageId,
+          messageId: res.messageId,
+          body: messageTextTrim,
+          text: messageTextTrim,
+          direction: 'out',
+          messageDirection: 'outbound',
+          fromMe: true,
+          status: 'sent',
+          type: 'text',
+          sender: attendantName,
+          attendantName,
+          timestamp: confirmedAt,
+          createdAt: confirmedAt,
+          whatsappSessionId: activeSessionId,
+          sessionId: activeSessionId,
+        } as ChatMessage];
+      });
       setMessageText('');
     } catch (error: any) {
       console.error('Erro ao enviar mensagem:', error);
       setError(error.message || 'Erro ao enviar mensagem');
       setMessageText(messageTextTrim);
       setTimeout(() => setError(null), 5000);
+    } finally {
+      textSendInFlightRef.current = false;
+      setIsSendingText(false);
     }
   };
 
@@ -1042,7 +1074,6 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
       formData.append('file', selectedFile, selectedFile.name);
       formData.append('caption', caption);
       formData.append('leadId', selectedConversation.leadId || selectedId);
-      formData.append('conversationId', selectedId);
       formData.append('isGroup', String(Boolean(selectedConversation.isGroup)));
       if (selectedConversation.groupId) formData.append('groupId', selectedConversation.groupId);
       formData.append('attendantName', attendantName);
@@ -1054,6 +1085,31 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
       if (!result.success || !result.messageId) {
         throw new Error(result.error || 'Não foi possível enviar a imagem.');
       }
+      const confirmedAt = new Date();
+      const confirmedPreview = filePreview;
+      setMessages(previous => {
+        if (previous.some(message => message.id === result.messageId)) return previous;
+        return [...previous, {
+          id: result.messageId,
+          messageId: result.messageId,
+          body: caption,
+          text: caption,
+          caption,
+          direction: 'out',
+          messageDirection: 'outgoing',
+          fromMe: true,
+          status: 'sent',
+          type: selectedFile.type.startsWith('image/') ? 'image' : 'document',
+          mediaUrl: result.mediaUrl || confirmedPreview || '',
+          thumbnailUrl: result.thumbnailUrl || confirmedPreview || '',
+          fileName: selectedFile.name,
+          mimeType: selectedFile.type,
+          timestamp: confirmedAt,
+          createdAt: confirmedAt,
+          whatsappSessionId: activeSessionId,
+          sessionId: activeSessionId,
+        } as ChatMessage];
+      });
       setSelectedFile(null);
       setFilePreview(null);
       setMessageText('');
@@ -1814,7 +1870,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
 
                 <button 
                   type="submit"
-                  disabled={isSendingMedia || (!messageText.trim() && !selectedFile) || (!selectedConversation.isGroup && !isWithin24h(selectedConversation.lastMessageAt))}
+                  disabled={isSendingText || isSendingMedia || (!messageText.trim() && !selectedFile) || (!selectedConversation.isGroup && !isWithin24h(selectedConversation.lastMessageAt))}
                   onClick={(e) => {
                     e.preventDefault();
                     if (selectedFile && !isSendingMedia) {
@@ -1825,7 +1881,7 @@ export default function AtendimentoView({ user, onViewChange }: AtendimentoViewP
                   }}
                   className="p-3.5 bg-primary text-white rounded-full hover:brightness-110 active:scale-90 transition-all disabled:opacity-50 disabled:scale-100 shadow-[0_10px_20px_rgba(var(--primary-rgb),0.3)] group"
                 >
-                  {isSendingMedia ? <span className="text-[10px] font-black px-1">Enviando...</span> : <Send size={24} fill="white" className="group-hover:rotate-12 transition-transform" />}
+                  {isSendingText || isSendingMedia ? <span className="text-[10px] font-black px-1">Enviando...</span> : <Send size={24} fill="white" className="group-hover:rotate-12 transition-transform" />}
                 </button>
               </form>
             </div>

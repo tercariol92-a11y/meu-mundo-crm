@@ -9,7 +9,9 @@ type ResponseLike = {
   json(payload: Record<string, unknown>): unknown;
 };
 
-export const config = { api: { bodyParser: false } };
+// O envio ao WhatsApp é confirmado antes da persistência da mídia. Em produção,
+// upload + Firestore podem ultrapassar o limite padrão curto da função proxy.
+export const config = { api: { bodyParser: false }, maxDuration: 60 };
 
 export default async function handler(req: RequestLike, res: ResponseLike) {
   const json = (status: number, payload: Record<string, unknown>) => {
