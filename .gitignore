@@ -11,6 +11,10 @@ coverage/
 !.env.example
 !.env.railway.example
 !.env.fiscal.example
+!.env.nfe.example
+
+# Artefatos locais gerados para entrega/visualização
+output/
 
 .vercel/
 .backups/

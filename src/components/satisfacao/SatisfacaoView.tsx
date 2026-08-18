@@ -30,6 +30,8 @@ interface Survey {
   comentario?: string;
   origem: string;
   createdAt: string;
+  nps?: number;
+  ratings?: Record<string, number>;
 }
 
 const SatisfacaoView: React.FC = () => {
@@ -41,7 +43,16 @@ const SatisfacaoView: React.FC = () => {
 
   useEffect(() => {
     const unsubscribe = databaseService.onSurveysChange((data) => {
-      setSurveys(data as Survey[]);
+      setSurveys(data.map((item: any) => ({
+        ...item,
+        clienteNome: item.clienteNome || item.clientName || 'Cliente',
+        atendente: item.atendente || item.technicianName || 'Equipe Mundo Tech',
+        tecnico: item.tecnico || item.technicianName || '',
+        nota: Number(item.nota ?? item.rating ?? item.ratings?.technicalSupport ?? 0),
+        comentario: item.comentario || item.comment || '',
+        origem: item.origem || item.origin || 'link público',
+        createdAt: item.createdAt || item.answeredAt || '',
+      })) as Survey[]);
       setLoading(false);
     });
     return () => unsubscribe();
@@ -65,7 +76,7 @@ const SatisfacaoView: React.FC = () => {
         // If no date, only show if we are looking for 'all' or it was very recent (optimistic)
         matchesPeriod = filterPeriod === '365'; 
       }
-      const matchesNote = filterNote === 'todos' || s.nota.toString() === filterNote;
+      const matchesNote = filterNote === 'todos' || (filterNote === 'promotores' ? Number(s.nps) >= 9 : filterNote === 'neutros' ? Number(s.nps) >= 7 && Number(s.nps) <= 8 : filterNote === 'detratores' ? Number(s.nps) <= 6 : s.nota.toString() === filterNote);
       const matchesSearch = 
         (s.clienteNome || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (s.telefone || '').includes(searchTerm) ||
@@ -182,11 +193,9 @@ const SatisfacaoView: React.FC = () => {
             onChange={(e) => setFilterNote(e.target.value)}
           >
             <option value="todos">Todas as notas</option>
-            <option value="5">Nota 5</option>
-            <option value="4">Nota 4</option>
-            <option value="3">Nota 3</option>
-            <option value="2">Nota 2</option>
-            <option value="1">Nota 1</option>
+            <option value="promotores">NPS Promotores (9–10)</option>
+            <option value="neutros">NPS Neutros (7–8)</option>
+            <option value="detratores">NPS Detratores (0–6)</option>
           </select>
         </div>
       </div>
@@ -281,7 +290,7 @@ const SatisfacaoView: React.FC = () => {
                 <thead className="bg-gray-50 text-gray-500 text-[11px] uppercase tracking-wider">
                   <tr>
                     <th className="px-6 py-3 font-semibold">Cliente</th>
-                    <th className="px-6 py-3 font-semibold">Nota</th>
+                    <th className="px-6 py-3 font-semibold">NPS / Suporte</th>
                     <th className="px-6 py-3 font-semibold">Atendente</th>
                     <th className="px-6 py-3 font-semibold">Técnico</th>
                     <th className="px-6 py-3 font-semibold">Data</th>
@@ -311,6 +320,7 @@ const SatisfacaoView: React.FC = () => {
                         </td>
                         <td className="px-6 py-4">
                           <div className="flex flex-col gap-1">
+                            {Number.isFinite(survey.nps) && <span className={`w-fit rounded-full px-2 py-0.5 text-xs font-black ${Number(survey.nps) >= 9 ? 'bg-green-100 text-green-700' : Number(survey.nps) >= 7 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`}>NPS {survey.nps}</span>}
                             {renderStars(survey.nota)}
                             <span className={`text-[10px] font-bold uppercase ${
                               survey.nota >= 4 ? 'text-green-600' : survey.nota === 3 ? 'text-yellow-600' : 'text-red-600'

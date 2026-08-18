@@ -357,7 +357,7 @@ function AppContent() {
         </div>
 
         <div className="hidden lg:block">
-          <TopBar user={internalUser} />
+          <TopBar user={internalUser} currentView={currentView} onViewChange={setCurrentView} />
         </div>
 
         <div className="flex-1 pb-20 lg:pb-0 flex flex-col md:flex-row gap-6">

@@ -2,7 +2,7 @@ import express from 'express';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, writeFile, chmod, readFile } from 'node:fs/promises';
 import { basename, extname, resolve, sep } from 'node:path';
 import { getFiscalEnvironment } from './config/environment';
@@ -45,6 +45,47 @@ function createFiscalDownload(buffer: Buffer, mimeType: string, fileName: string
   return `/api/fiscal/file-download?token=${token}`;
 }
 
+function getStoredCertificatePath(companyId: string) {
+  const root = resolve(process.env.FISCAL_CERTIFICATE_STORAGE_PATH || './fiscal-private');
+  const companyRoot = resolve(root, companyId);
+  const certificatePath = resolve(companyRoot, 'certificates', 'active.pfx');
+  const passwordPath = resolve(companyRoot, 'certificates', 'password.enc');
+  if (!companyRoot.startsWith(`${root}${sep}`) || !certificatePath.startsWith(`${companyRoot}${sep}`) || !passwordPath.startsWith(`${companyRoot}${sep}`)) {
+    throw new Error('Caminho privado do certificado inválido.');
+  }
+  return { root, companyRoot, certificatePath, passwordPath };
+}
+
+function getCertificateEncryptionKey() {
+  const configured = String(process.env.FISCAL_CERTIFICATE_ENCRYPTION_KEY || '').trim();
+  let key: Buffer;
+  try { key = Buffer.from(configured, 'base64'); } catch { key = Buffer.alloc(0); }
+  if (key.length !== 32) {
+    throw Object.assign(new Error('A chave de proteção do certificado não está configurada.'), { status: 503, code: 'CERTIFICATE_VAULT_NOT_CONFIGURED' });
+  }
+  return key;
+}
+
+function encryptCertificatePassword(password: string) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', getCertificateEncryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(password, 'utf8'), cipher.final()]);
+  return JSON.stringify({ version: 1, algorithm: 'aes-256-gcm', iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: encrypted.toString('base64') });
+}
+
+function decryptCertificatePassword(payload: Buffer) {
+  try {
+    const parsed = JSON.parse(payload.toString('utf8'));
+    if (parsed?.version !== 1 || parsed?.algorithm !== 'aes-256-gcm') throw new Error('Formato incompatível.');
+    const decipher = createDecipheriv('aes-256-gcm', getCertificateEncryptionKey(), Buffer.from(String(parsed.iv), 'base64'));
+    decipher.setAuthTag(Buffer.from(String(parsed.tag), 'base64'));
+    return Buffer.concat([decipher.update(Buffer.from(String(parsed.data), 'base64')), decipher.final()]).toString('utf8');
+  } catch (error: any) {
+    if (error?.code === 'CERTIFICATE_VAULT_NOT_CONFIGURED') throw error;
+    throw Object.assign(new Error('A credencial protegida do certificado não pôde ser aberta.'), { status: 500, code: 'CERTIFICATE_VAULT_DECRYPT_FAILED' });
+  }
+}
+
 app.get('/api/fiscal/file-download', (req, res) => {
   if (!secretMatches(String(req.headers['x-internal-secret'] || ''))) return res.status(403).end();
   const token = String(req.query.token || '');
@@ -74,7 +115,24 @@ async function protect(req: any, res: any, next: any) {
     }
     const companyId = String(user.companyId || user.tenantId || user.empresaId || decoded.companyId || '');
     if (!companyId || !/^[A-Za-z0-9_-]{2,128}$/.test(companyId)) return res.status(403).json({ success: false, code: 'COMPANY_REQUIRED', error: 'Empresa fiscal inválida.' });
-    req.fiscal = { decoded, db, companyId }; next();
+    req.fiscal = { decoded, db, companyId };
+    if (req.body?.useStoredCertificate === true) {
+      try {
+        const { certificatePath, passwordPath } = getStoredCertificatePath(companyId);
+        const [storedPfx, encryptedPassword] = await Promise.all([readFile(certificatePath), readFile(passwordPath)]);
+        req.body = {
+          ...req.body,
+          fileName: 'active.pfx',
+          mimeType: 'application/x-pkcs12',
+          certificateBase64: storedPfx.toString('base64'),
+          password: decryptCertificatePassword(encryptedPassword),
+        };
+      } catch (error: any) {
+        if (error?.code === 'ENOENT') return res.status(404).json({ success: false, code: 'STORED_CERTIFICATE_NOT_FOUND', error: 'O certificado A1 não está no armazenamento persistente. Selecione o arquivo uma vez para salvá-lo.' });
+        throw error;
+      }
+    }
+    next();
   } catch (error) { next(error); }
 }
 
@@ -103,6 +161,17 @@ app.get('/api/fiscal/environment', protect, (req: any, res) => {
   res.json({ success: true, data: { ...environment, companyId: req.fiscal.companyId, productionBlocked: environment.environment !== 'producao', transmissionEnabled: environment.environment === 'producao' && environment.productionEnabled } });
 });
 
+app.post('/api/fiscal/certificate/stored/validate', protect, async (req: any, res, next) => { try {
+  const input = readCertificate(req.body);
+  const parsed = parsePkcs12(input.buffer, input.password, String(req.body?.expectedCnpj || ''));
+  await writeFiscalAudit(req.fiscal.db, req.fiscal.companyId, req.fiscal.decoded.uid, 'stored_certificate_unlocked', {
+    serialNumberMasked: parsed.metadata.serialNumberMasked,
+    validTo: parsed.metadata.validTo,
+    cnpj: parsed.metadata.cnpj,
+  });
+  res.json({ success: true, data: parsed.metadata });
+} catch (error) { next(error); } });
+
 app.post('/api/fiscal/certificate/validate', protect, async (req: any, res, next) => {
   const requestId = randomBytes(8).toString('hex');
   let stage = 'receive_request';
@@ -121,9 +190,15 @@ app.post('/api/fiscal/certificate/validate', protect, async (req: any, res, next
   stage = 'open_pkcs12';
   const parsed = parsePkcs12(input.buffer, input.password, String(req.body?.expectedCnpj || ''));
   stage = 'persist_private_certificate';
-  const root = resolve(process.env.FISCAL_CERTIFICATE_STORAGE_PATH || './fiscal-private'); const companyDir = resolve(root, req.fiscal.companyId, 'certificates');
-  if (!companyDir.startsWith(`${root}${sep}`)) throw new Error('Caminho privado inválido.');
-  await mkdir(companyDir, { recursive: true, mode: 0o700 }); const path = resolve(companyDir, 'active.pfx'); await writeFile(path, input.buffer, { mode: 0o600 }); await chmod(path, 0o600);
+  const { companyRoot, certificatePath, passwordPath } = getStoredCertificatePath(req.fiscal.companyId);
+  const companyDir = resolve(companyRoot, 'certificates');
+  const protectedPassword = encryptCertificatePassword(input.password);
+  await mkdir(companyDir, { recursive: true, mode: 0o700 });
+  await Promise.all([
+    writeFile(certificatePath, input.buffer, { mode: 0o600 }),
+    writeFile(passwordPath, protectedPassword, { mode: 0o600 }),
+  ]);
+  await Promise.all([chmod(certificatePath, 0o600), chmod(passwordPath, 0o600)]);
   stage = 'persist_certificate_metadata';
   await req.fiscal.db.collection('companies').doc(req.fiscal.companyId).collection('fiscal').doc('certificate').set({ ...parsed.metadata, storageReference: 'private://active-certificate', updatedBy: req.fiscal.decoded.uid, updatedAt: FieldValue.serverTimestamp() });
   stage = 'write_audit';

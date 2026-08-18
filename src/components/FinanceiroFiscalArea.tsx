@@ -178,9 +178,16 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
   const [nfeForm, setNfeForm] = useState({
     clienteId: '',
     produtoId: '',
-    cfop: '5.102', // Venda de mercadoria para o estado
-    cstCsosn: '0102', // Simples Nacional sem crédito
-    ncm: '8471.60.52', // Keyboard or general tech accessories
+    operacao: 'venda_comum' as 'venda_comum' | 'retorno_conserto',
+    cfop: '5102', // Venda interna de mercadoria adquirida de terceiros
+    cstCsosn: '102', // Simples Nacional sem permissão de crédito e sem ST
+    ncm: '',
+    origemMercadoria: '0',
+    unidadeTributavel: 'UN',
+    cest: '',
+    gtin: '',
+    pisCst: '',
+    cofinsCst: '',
     valorProduto: 0,
     frete: 0,
     formaPagamento: 'Boleto' as const,
@@ -188,23 +195,6 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
     emitirBoleto: false,
     observacoes: ''
   });
-
-  // Calculate NFe Taxes in Realtime
-  const getCalculatedNfeTaxes = (val: number) => {
-    // Basic standard simulation: 4% ICMS, 1.2% PIS/COFINS etc.
-    const icmsValue = parseFloat((val * 0.04).toFixed(2));
-    const ipiValue = parseFloat((val * 0.02).toFixed(2));
-    const pisValue = parseFloat((val * 0.0065).toFixed(2));
-    const cofinsValue = parseFloat((val * 0.03).toFixed(2));
-    const totalTaxes = parseFloat((icmsValue + ipiValue + pisValue + cofinsValue).toFixed(2));
-    return {
-      icmsValor: icmsValue,
-      ipiValor: ipiValue,
-      pisValor: pisValue,
-      cofinsValor: cofinsValue,
-      totalImpostos: totalTaxes
-    };
-  };
 
   // Form states for NFSe
   const [nfseForm, setNfseForm] = useState({
@@ -273,6 +263,14 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
       showToast('Por favor, preencha todos os campos obrigatórios.', 'error');
       return;
     }
+    if (!/^\d{8}$/.test(String(nfeForm.ncm || '').replace(/\D/g, ''))) {
+      showToast('Cadastre um NCM válido com 8 dígitos no produto antes de preparar a NF-e.', 'error');
+      return;
+    }
+    if (nfeForm.cstCsosn === '202' && !/^\d{7}$/.test(String(nfeForm.cest || '').replace(/\D/g, ''))) {
+      showToast('O CSOSN 202 exige CEST válido com 7 dígitos no cadastro do produto.', 'error');
+      return;
+    }
 
     try {
       const clientObj = clientes.find(c => c.id === nfeForm.clienteId);
@@ -283,15 +281,9 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
         return;
       }
 
-      // 1. Generate tax details
-      const taxComputed = getCalculatedNfeTaxes(nfeForm.valorProduto);
-
-      // 2. Mock access key & series number
-      const mockKey = Array.from({length: 44}, () => Math.floor(Math.random()*10)).join('');
-      const lastNf = nfeList[0];
-      const nextNumber = lastNf ? String(Number(lastNf.numeroNota) + 1).padStart(6, '0') : '000101';
-
-      // 3. Assemble document
+      // NF-e de produto permanece como rascunho até autorização real da SEFA/PR.
+      // Nenhuma chave, protocolo, tributo ou status fiscal pode ser simulado no navegador.
+      const draftNumber = `RASC-${Date.now()}`;
       const docPayload: Omit<NotaFiscalProduto, 'id' | 'createdAt' | 'updatedAt'> = {
         clienteId: clientObj.id,
         clienteNome: clientObj.razaoSocial || clientObj.nomeFantasia,
@@ -307,69 +299,41 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
         ncm: nfeForm.ncm,
         cfop: nfeForm.cfop,
         cstCsosn: nfeForm.cstCsosn,
+        origemMercadoria: nfeForm.origemMercadoria,
+        unidadeTributavel: nfeForm.unidadeTributavel,
+        cest: nfeForm.cest,
+        gtin: nfeForm.gtin,
+        pisCst: nfeForm.pisCst,
+        cofinsCst: nfeForm.cofinsCst,
         valorProduto: Number(nfeForm.valorProduto),
         frete: Number(nfeForm.frete || 0),
         impostos: {
-          icmsId: 102,
-          icmsValor: taxComputed.icmsValor,
-          ipiValor: taxComputed.ipiValor,
-          pisValor: taxComputed.pisValor,
-          cofinsValor: taxComputed.cofinsValor,
-          totalImpostos: taxComputed.totalImpostos
+          totalImpostos: 0
         },
         formaPagamento: nfeForm.formaPagamento,
         condicaoPagamento: nfeForm.condicaoPagamento,
         observacoes: nfeForm.observacoes || 'Mercadoria despachada. Garantia de 12 meses.',
-        status: 'Autorizada', // By default authorized in simulation
-        chaveAcesso: mockKey,
-        numeroNota: nextNumber,
-        serie: '001',
+        status: 'Rascunho',
+        ambienteNfe: 'homologacao',
+        numeroNota: draftNumber,
+        serie: '',
         dataEmissao: new Date().toISOString().split('T')[0]
       };
 
       // 4. Save to Firestore
       const createdNf = await databaseService.createNotaFiscalProduto(docPayload);
 
-      // 5. Emit Bank Slip (Boleto) if selected and payment is "Boleto"
-      if (nfeForm.emitirBoleto && nfeForm.formaPagamento === 'Boleto' && contasBancarias.length > 0) {
-        const bankAccount = contasBancarias[0];
-        const nextSlipNumber = String(boletos.length + 1204).padStart(7, '0');
-        const grandTotal = Number(nfeForm.valorProduto) + Number(nfeForm.frete || 0);
-
-        const slipPayload: Omit<BoletoBancario, 'id' | 'createdAt' | 'updatedAt'> = {
-          clienteId: clientObj.id,
-          clienteNome: clientObj.razaoSocial || clientObj.nomeFantasia,
-          bancoId: bankAccount.id,
-          bancoNome: bankAccount.banco,
-          nossoNumero: nextSlipNumber,
-          valorOriginal: grandTotal,
-          valorCobrado: grandTotal,
-          vencimento: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 30 days
-          dataDocumento: new Date().toISOString().split('T')[0],
-          documentoOrigemId: createdNf.id,
-          documentoOrigemTipo: 'Produto',
-          juros: bankAccount.jurosPadrao,
-          multa: bankAccount.multaPadrao,
-          desconto: bankAccount.descontoPadrao,
-          status: 'Pendente',
-          pdfSimuladoUrl: `https://mockup-bank.io/invoice/render/${nextSlipNumber}`
-        };
-
-        const slip = await databaseService.createBoletoBancario(slipPayload);
-        await databaseService.updateNotaFiscalProduto(createdNf.id, { boletoCriadoId: slip.id });
-      }
-
-      // Gravando log de auditoria fiscal
+      // Auditoria registra somente a criação do rascunho; não registra emissão.
       await databaseService.createFiscalAuditLog({
         userId: user.id || 'system',
         userName: user.nome || 'Sistema',
-        action: 'emissao_nfe',
-        details: `Emissão de NF-e nº ${nextNumber} (Série 001). Cliente: ${docPayload.clienteNome}. Valor: ${formatToBRL(docPayload.valorProduto + (docPayload.frete || 0))}. ${nfeForm.emitirBoleto ? 'Boleto automático gerado.' : ''}`,
+        action: 'configuracao_alterada',
+        details: `Rascunho de NF-e de produto criado em homologação. Cliente: ${docPayload.clienteNome}. Valor: ${formatToBRL(docPayload.valorProduto + (docPayload.frete || 0))}. Nenhuma transmissão realizada.`,
         tipoDocumento: 'nfe',
-        documentNumero: nextNumber
+        documentNumero: createdNf.numeroNota
       });
 
-      showToast('NF-e emitida e autorizada com sucesso!');
+      showToast('Rascunho salvo. Nenhuma NF-e foi transmitida.', 'info');
       setIsNfeModalOpen(false);
       loadData();
     } catch (error) {
@@ -982,13 +946,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
       if (!useValidatedProductionContractFallback(error)) setPhase2Contract({ status: 'blocked', detail: error instanceof Error ? error.message : 'Não foi possível confirmar o contrato oficial.' });
     }
   };
-  const handleCertificateFile = async (file?: File) => {
-    if (!file) return;
-    // Read the protected input at file-selection time. This avoids a stale
-    // controlled-state snapshot when the native file dialog opens immediately
-    // after the password is typed. The value is never persisted or logged.
-    const certificatePasswordAtSelection = certificatePasswordInputRef.current?.value ?? certificatePassword;
-    if (!certificatePasswordAtSelection) return showToast('Informe a senha do certificado A1 antes de selecionar o arquivo.', 'error');
+  const validateA1Credentials = async (common: Record<string, unknown>, mode: 'upload' | 'stored', displayName?: string) => {
     if (!configFiscal?.cnpj || !configFiscal.inscricaoMunicipal || !configFiscal.codigoServicoMunicipal) return showToast('Preencha CNPJ, Inscrição Municipal e Código do Serviço.', 'error');
     setIsUploadingCertificate(true);
     resetA1Checks();
@@ -996,13 +954,11 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
     setPhase3Result({ status: 'idle' });
     let currentStep = 'a1';
     try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '')); reader.onerror = () => reject(new Error('Falha ao ler certificado.')); reader.readAsDataURL(file);
-      });
-      const common = { fileName: file.name, mimeType: file.type || 'application/x-pkcs12', certificateBase64: base64, password: certificatePasswordAtSelection, expectedCnpj: configFiscal.cnpj };
       certificateSessionRef.current = common;
       updateA1Check('a1', 'running');
-      const certificate = await fiscalApi.validateCertificate(common);
+      const certificate = mode === 'stored'
+        ? await fiscalApi.validateStoredCertificate(common)
+        : await fiscalApi.validateCertificate(common);
       updateA1Check('a1', 'passed', 'PKCS#12 lido e validado.');
       updateA1Check('password', 'passed', 'Senha aceita pelo PKCS#12.');
       updateA1Check('validity', 'passed', `${certificate.validFrom} a ${certificate.validTo}`);
@@ -1030,7 +986,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
       } catch (phase2Error) {
         if (!useValidatedProductionContractFallback(phase2Error)) setPhase2Contract({ status: 'blocked', detail: phase2Error instanceof Error ? phase2Error.message : 'Não foi possível confirmar o contrato oficial.' });
       }
-      setConfigFiscal(previous => previous ? { ...previous, certificadoDigitalNome: file.name, certificadoVencimento: String(certificate.validTo || '').slice(0, 10) } : previous);
+      setConfigFiscal(previous => previous ? { ...previous, certificadoDigitalNome: displayName || previous.certificadoDigitalNome || 'Certificado A1 salvo', certificadoVencimento: String(certificate.validTo || '').slice(0, 10) } : previous);
       showToast(`A1 validado. Cadeia ICP-Brasil: OK; mTLS HTTP ${mtls.statusCode || 'sem resposta'}; assinatura local: ${dps.signatureVerified ? 'OK' : 'falhou'}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Falha ao validar certificado.';
@@ -1039,6 +995,22 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
       showToast(`Falha na etapa ${currentStep}: ${message}`, 'error');
     }
     finally { setCertificatePassword(''); setIsUploadingCertificate(false); }
+  };
+  const handleStoredCertificate = async () => {
+    await validateA1Credentials({ useStoredCertificate: true, expectedCnpj: configFiscal?.cnpj || '' }, 'stored');
+  };
+  const handleCertificateFile = async (file?: File) => {
+    if (!file) return;
+    const password = certificatePasswordInputRef.current?.value ?? certificatePassword;
+    if (!password) return showToast('Informe a senha do certificado A1 antes de selecionar o arquivo.', 'error');
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader(); reader.onload = () => resolve(String(reader.result || '')); reader.onerror = () => reject(new Error('Falha ao ler certificado.')); reader.readAsDataURL(file);
+      });
+      await validateA1Credentials({ fileName: file.name, mimeType: file.type || 'application/x-pkcs12', certificateBase64: base64, password, expectedCnpj: configFiscal?.cnpj || '' }, 'upload', file.name);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Falha ao ler certificado.', 'error');
+    }
   };
   const handleSaveFiscalConfig = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2108,11 +2080,20 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                         Utilizado para assinar XML e efetuar conexão autenticada.
                       </p>
                       <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded block mt-2 w-max">
-                        CARREGADO: {configFiscal.certificadoDigitalNome || 'Nenhum certificado ativo'}
+                        CADASTRADO: {configFiscal.certificadoDigitalNome || 'Nenhum certificado ativo'}
                       </span>
                     </div>
                     {canSetConfig && (
-                      <div className="space-y-2"><input ref={certificatePasswordInputRef} type="password" value={certificatePassword} onChange={e => setCertificatePassword(e.target.value)} placeholder="Senha do certificado" autoComplete="new-password" className="block w-full text-xs border border-slate-200 rounded-lg px-3 py-1.5" /><label className="block px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold uppercase rounded-lg tracking-wider text-center cursor-pointer">{isUploadingCertificate ? 'Validando certificado...' : 'Substituir Certificado'}<input type="file" accept=".pfx,.p12,application/x-pkcs12" disabled={isUploadingCertificate} onChange={e => { void handleCertificateFile(e.target.files?.[0]); e.currentTarget.value=''; }} className="hidden" /></label></div>
+                      <div className="space-y-2">
+                        <input ref={certificatePasswordInputRef} type="password" value={certificatePassword} onChange={e => setCertificatePassword(e.target.value)} placeholder="Senha (somente no primeiro cadastro)" autoComplete="new-password" className="block w-full text-xs border border-slate-200 rounded-lg px-3 py-1.5" />
+                        {configFiscal.certificadoDigitalNome && (
+                          <button type="button" disabled={isUploadingCertificate} onClick={() => void handleStoredCertificate()} className="block w-full px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold uppercase rounded-lg tracking-wider text-center">
+                            {isUploadingCertificate ? 'Validando certificado...' : 'Usar certificado salvo'}
+                          </button>
+                        )}
+                        <label className="block px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold uppercase rounded-lg tracking-wider text-center cursor-pointer">{isUploadingCertificate ? 'Aguarde...' : 'Substituir Certificado'}<input type="file" accept=".pfx,.p12,application/x-pkcs12" disabled={isUploadingCertificate} onChange={e => { void handleCertificateFile(e.target.files?.[0]); e.currentTarget.value=''; }} className="hidden" /></label>
+                        {configFiscal.certificadoDigitalNome && <p className="text-[10px] text-slate-500">O A1 e sua senha protegida ficam no cofre privado do serviço fiscal. Não é necessário digitá-la novamente.</p>}
+                      </div>
                     )}
                   </div>
 
@@ -2369,7 +2350,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-lg p-5">
             <h3 className="text-md font-extrabold text-slate-800 mb-3 flex items-center gap-2 border-b border-slate-100 pb-2">
               <FileText className="text-blue-600" size={18} />
-              Emissão Oficial de NF-e (Equipamento & Produto)
+              Rascunho de NF-e de Produto · Homologação
             </h3>
 
             <form onSubmit={handleNfeSubmit} className="space-y-3.5 text-xs">
@@ -2380,7 +2361,11 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                   value={nfeForm.clienteId}
                   onChange={e => {
                     const cl = clientes.find(c => c.id === e.target.value);
-                    setNfeForm({ ...nfeForm, clienteId: e.target.value });
+                    const interestadual = String(cl?.estado || 'PR').trim().toUpperCase() !== 'PR';
+                    const cfop = nfeForm.operacao === 'retorno_conserto'
+                      ? (interestadual ? '6916' : '5916')
+                      : (interestadual ? '6102' : '5102');
+                    setNfeForm({ ...nfeForm, clienteId: e.target.value, cfop });
                   }}
                   className="w-full border border-slate-200 bg-white rounded-xl p-2 focus:ring-1 focus:ring-blue-500"
                 >
@@ -2391,20 +2376,29 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                 </select>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Tipo de serviço</label>
-                  <select value={nfseForm.serviceKind} onChange={e => setNfseForm({ ...nfseForm, serviceKind: e.target.value })} className="w-full border border-slate-200 bg-white rounded-xl p-2">
-                    <option value="instalacao">Instalação</option><option value="manutencao">Manutenção</option><option value="suporte">Suporte técnico</option><option value="implantacao">Implantação</option><option value="treinamento">Treinamento</option><option value="configuracao">Configuração</option><option value="mensalidade">Mensalidade</option><option value="recorrente">Serviço recorrente</option><option value="locacao">Locação (validar contabilmente)</option><option value="outro">Outro serviço</option>
+                  <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Operação fiscal</label>
+                  <select
+                    value={nfeForm.operacao}
+                    onChange={e => {
+                      const operacao = e.target.value as 'venda_comum' | 'retorno_conserto';
+                      const cliente = clientes.find(c => c.id === nfeForm.clienteId);
+                      const interestadual = String(cliente?.estado || 'PR').trim().toUpperCase() !== 'PR';
+                      const cfop = operacao === 'retorno_conserto'
+                        ? (interestadual ? '6916' : '5916')
+                        : (interestadual ? '6102' : '5102');
+                      setNfeForm({ ...nfeForm, operacao, cfop });
+                    }}
+                    className="w-full border border-slate-200 bg-white rounded-xl p-2"
+                  >
+                    <option value="venda_comum">Venda comum</option>
+                    <option value="retorno_conserto">Retorno de mercadoria recebida para conserto</option>
                   </select>
                 </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Competência</label>
-                  <input type="month" required value={nfseForm.competence} onChange={e => setNfseForm({ ...nfseForm, competence: e.target.value })} className="w-full border border-slate-200 rounded-xl p-2" />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Desconto</label>
-                  <CurrencyInput value={nfseForm.discount || 0} onChange={val => setNfseForm({ ...nfseForm, discount: val })} className="w-full border border-slate-200 rounded-xl p-2" />
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-2 text-[11px] text-amber-900">
+                  <b>CRT 1 · Simples Nacional</b><br />
+                  CFOP definido pela operação e UF do destinatário. A tributação do item ainda será validada antes da homologação.
                 </div>
               </div>
 
@@ -2417,9 +2411,21 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                     onChange={e => {
                       const prod = produtos.find(p => p.id === e.target.value);
                       if (prod) {
-                        setNfeForm({ ...nfeForm, produtoId: e.target.value, valorProduto: prod.valorVenda });
+                        setNfeForm({
+                          ...nfeForm,
+                          produtoId: e.target.value,
+                          valorProduto: prod.valorVenda,
+                          ncm: String(prod.ncm || '').replace(/\D/g, ''),
+                          cstCsosn: prod.csosn || '102',
+                          origemMercadoria: prod.origemMercadoria || '0',
+                          unidadeTributavel: prod.unidadeTributavel || 'UN',
+                          cest: String(prod.cest || '').replace(/\D/g, ''),
+                          gtin: String(prod.gtin || '').replace(/\D/g, ''),
+                          pisCst: prod.pisCst || '',
+                          cofinsCst: prod.cofinsCst || '',
+                        });
                       } else {
-                        setNfeForm({ ...nfeForm, produtoId: e.target.value });
+                        setNfeForm({ ...nfeForm, produtoId: e.target.value, ncm: '', cest: '', gtin: '', pisCst: '', cofinsCst: '' });
                       }
                     }}
                     className="w-full border border-slate-200 bg-white rounded-xl p-2 focus:ring-1 focus:ring-blue-500"
@@ -2441,6 +2447,12 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                     className="w-full border border-slate-200 rounded-xl p-2 focus:ring-1 focus:ring-blue-500 bg-white"
                   />
                 </div>
+              </div>
+
+              <div className={`rounded-xl border p-3 ${/^\d{8}$/.test(nfeForm.ncm) ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-900'}`}>
+                <div className="text-[11px] font-black uppercase">NCM do produto</div>
+                <div className="mt-1 text-xs font-mono">{nfeForm.ncm || 'Não cadastrado'}</div>
+                {!/^\d{8}$/.test(nfeForm.ncm) && <div className="mt-1 text-[10px] font-bold">Corrija o produto em Comercial → Produtos antes de preparar a NF-e.</div>}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2545,7 +2557,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                   type="submit"
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black uppercase tracking-wider transition shadow-md"
                 >
-                  Verificar & Transmitir Nota
+                  Salvar rascunho sem transmitir
                 </button>
               </div>
             </form>

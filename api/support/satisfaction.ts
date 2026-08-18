@@ -48,7 +48,7 @@ export default async function handler(req: RequestLike, res: ResponseLike) {
     if (match.empty) return res.status(404).json({ success: false, error: 'Avaliação não encontrada ou link inválido.' });
     const ticketRef = match.docs[0].ref;
     const ticket = match.docs[0].data();
-    const answered = ticket.satisfactionSurveyStatus === 'answered' || Number.isFinite(ticket.satisfactionRating);
+    const answered = ticket.satisfactionSurveyStatus === 'answered' || Number.isFinite(ticket.satisfactionNps) || Number.isFinite(ticket.satisfactionRating);
 
     if (req.method === 'GET') {
       return res.status(200).json({
@@ -58,21 +58,28 @@ export default async function handler(req: RequestLike, res: ResponseLike) {
           clientName: ticket.satisfactionClientName || ticket.clienteNome || 'Cliente',
           technicianName: ticket.satisfactionTechnicianName || ticket.tecnico?.nome || 'Equipe Mundo Tech',
           answered,
-          rating: answered ? ticket.satisfactionRating : null,
+          nps: answered ? ticket.satisfactionNps ?? null : null,
+          ratings: answered ? ticket.satisfactionRatings ?? null : null,
         },
       });
     }
 
-    const rating = Number(req.body?.rating);
+    const nps = Number(req.body?.nps);
     const comment = String(req.body?.comment || '').trim().slice(0, 1000);
-    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-      return res.status(400).json({ success: false, error: 'Selecione uma nota de 1 a 5.' });
+    const rawRatings = (req.body?.ratings || {}) as Record<string, unknown>;
+    const ratingKeys = ['technicalSupport', 'services', 'commercialSupport', 'product', 'administrative'] as const;
+    const ratings = Object.fromEntries(ratingKeys.map(key => [key, Number(rawRatings[key])])) as Record<(typeof ratingKeys)[number], number>;
+    if (!Number.isInteger(nps) || nps < 0 || nps > 10) {
+      return res.status(400).json({ success: false, error: 'Selecione uma nota NPS de 0 a 10.' });
+    }
+    if (ratingKeys.some(key => !Number.isInteger(ratings[key]) || ratings[key] < 1 || ratings[key] > 5)) {
+      return res.status(400).json({ success: false, error: 'Avalie todos os tópicos de 1 a 5 estrelas.' });
     }
 
     await db.runTransaction(async transaction => {
       const fresh = await transaction.get(ticketRef);
       const data = fresh.data() || {};
-      if (data.satisfactionSurveyStatus === 'answered' || Number.isFinite(data.satisfactionRating)) {
+      if (data.satisfactionSurveyStatus === 'answered' || Number.isFinite(data.satisfactionNps) || Number.isFinite(data.satisfactionRating)) {
         const duplicate = new Error('Este chamado já foi avaliado.');
         (duplicate as Error & { status?: number }).status = 409;
         throw duplicate;
@@ -80,22 +87,28 @@ export default async function handler(req: RequestLike, res: ResponseLike) {
       const answeredAt = FieldValue.serverTimestamp();
       transaction.update(ticketRef, {
         satisfactionSurveyStatus: 'answered',
-        satisfactionRating: rating,
+        satisfactionNps: nps,
+        satisfactionRatings: ratings,
+        satisfactionRating: ratings.technicalSupport,
         satisfactionComment: comment,
         satisfactionAnsweredAt: answeredAt,
-        satisfactionOrigin: 'whatsapp',
+        satisfactionOrigin: data.satisfactionOrigin || 'public_link',
         updatedAt: answeredAt,
       });
       transaction.set(db.collection('satisfactionReviews').doc(`ticket-${fresh.id}`), {
         ticketId: fresh.id,
         protocol: data.protocolo || fresh.id,
-        rating,
+        nps,
+        nota: ratings.technicalSupport,
+        rating: ratings.technicalSupport,
+        ratings,
         comment,
         technicianId: data.satisfactionTechnicianId || data.tecnicoId || null,
         technicianName: data.satisfactionTechnicianName || data.tecnico?.nome || 'Equipe Mundo Tech',
         clientName: data.satisfactionClientName || data.clienteNome || 'Cliente',
-        origin: 'whatsapp',
+        origin: data.satisfactionOrigin || 'public_link',
         answeredAt,
+        createdAt: answeredAt,
       }, { merge: false });
     });
     return res.status(200).json({ success: true, message: 'Avaliação enviada com sucesso.' });

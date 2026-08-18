@@ -18,6 +18,10 @@ async function callFiscal(path: string, body: Record<string, unknown>) {
       CERTIFICATE_CNPJ_MISMATCH: 'O CNPJ do certificado é incompatível com a empresa.',
       INVALID_CERTIFICATE_FILENAME: 'Selecione um arquivo de certificado .pfx ou .p12 válido.',
       INVALID_CERTIFICATE_MIME: 'O navegador enviou o certificado em um formato incompatível.',
+      CERTIFICATE_PASSWORD_REQUIRED: 'Informe a senha para desbloquear o certificado A1 salvo.',
+      STORED_CERTIFICATE_NOT_FOUND: 'O A1 ainda não está salvo no armazenamento fiscal persistente. Selecione o arquivo uma vez.',
+      CERTIFICATE_VAULT_NOT_CONFIGURED: 'O cofre seguro do certificado ainda não está configurado no serviço fiscal.',
+      CERTIFICATE_VAULT_DECRYPT_FAILED: 'A senha protegida do A1 não pôde ser recuperada. Substitua o certificado para salvá-la novamente.',
       FISCAL_SERVICE_NOT_CONFIGURED: 'O serviço fiscal não está configurado.',
       FISCAL_PROXY_ERROR: 'O serviço fiscal está temporariamente indisponível.',
     };
@@ -90,6 +94,7 @@ async function fetchFiscalBlob(data: { mimeType: string; fileName: string; downl
 export const fiscalApi = {
   getEnvironment: () => callFiscalGet('/api/fiscal/environment'),
   validateCertificate: (body: Record<string, unknown>) => callFiscal('/api/fiscal/certificate-validate', body),
+  validateStoredCertificate: (body: Record<string, unknown>) => callFiscal('/api/fiscal/certificate-stored-validate', { ...body, useStoredCertificate: true }),
   testMtls: (body: Record<string, unknown>) => callFiscal('/api/fiscal/mtls-test', body),
   signLocalDps: (body: Record<string, unknown>) => callFiscal('/api/fiscal/xml-sign-test', body),
   discoverPhase2Contract: (body: Record<string, unknown>) => callFiscal('/api/fiscal/phase2-discover', body),

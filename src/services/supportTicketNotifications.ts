@@ -1,5 +1,5 @@
 import { collection, doc, getDoc, getDocs, query, updateDoc, where } from './resilientFirestoreClient';
-import { db } from '../firebase';
+import { auth, db } from '../firebase';
 import { Chamado, Cliente, Tecnico, Unidade, Usuario } from '../types';
 import { whatsappService } from './whatsapp.service';
 
@@ -79,26 +79,52 @@ export async function requestTicketSatisfaction(ticket: Chamado) {
   if (!ticket.id || ticket.satisfactionSurveyStatus === 'answered' || ticket.satisfactionRequestedAt) return { success: false, skipped: true, reason: 'Pesquisa já solicitada ou respondida.' };
   const { client } = await ticketContext(ticket);
   const phone = digits(client?.celularWhatsapp || client?.telefoneFixo);
-  if (!phone) {
-    await appendHistory(ticket.id, { type: 'satisfaction_survey', status: 'error', createdAt: new Date().toISOString(), error: 'Cliente sem WhatsApp cadastrado.' });
-    return { success: false, skipped: true, reason: 'Cliente sem WhatsApp cadastrado.' };
-  }
   const token = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll('-', '');
   const tokenHash = await sha256(token);
   const link = `${window.location.origin}/avaliar-chamado?token=${encodeURIComponent(token)}`;
   const number = ticket.protocolo || `CH-${ticket.id.slice(-6).toUpperCase()}`;
   const clientName = client?.nomeFantasia || client?.razaoSocial || ticket.clienteNome || 'Cliente';
   const technicianName = ticket.tecnico?.nome || 'Equipe Mundo Tech';
-  const message = `Olá, ${clientName}.\n\nO chamado #${number} foi concluído pela Mundo Tech.\n\nComo você avalia o atendimento realizado?\n\n⭐ 1\n⭐⭐ 2\n⭐⭐⭐ 3\n⭐⭐⭐⭐ 4\n⭐⭐⭐⭐⭐ 5\n\nAvalie pelo link seguro: ${link}`;
-  await updateDoc(doc(db, 'chamados', ticket.id), { satisfactionTokenHash: tokenHash, satisfactionSurveyStatus: 'pending', satisfactionRequestedAt: new Date().toISOString(), satisfactionTechnicianId: ticket.tecnicoId || '', satisfactionTechnicianName: technicianName, satisfactionClientName: clientName, satisfactionOrigin: 'whatsapp' });
-  try {
-    const result: any = await whatsappService.sendMessage(phone, message, 'Meu Mundo CRM', { satisfactionSurvey: true, ticketId: ticket.id, clientId: ticket.clienteId });
-    await appendHistory(ticket.id, { type: 'satisfaction_survey', status: 'sent', createdAt: new Date().toISOString(), destinationMasked: maskPhone(phone), messageId: result?.messageId || '' });
-    return { success: true, messageId: result?.messageId || '' };
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : 'Falha no envio.';
-    await updateDoc(doc(db, 'chamados', ticket.id), { satisfactionSurveyStatus: 'send_failed' });
-    await appendHistory(ticket.id, { type: 'satisfaction_survey', status: 'error', createdAt: new Date().toISOString(), destinationMasked: maskPhone(phone), error: reason });
-    return { success: false, error: reason };
+  const message = `Olá, ${clientName}.\n\nO chamado #${number} foi concluído pela Mundo Tech.\n\nSua opinião é importante para nós. Avalie o atendimento pelo link seguro (leva menos de 1 minuto):\n${link}`;
+  const email = String(client?.emailPrincipal || client?.emailTecnico || client?.emailFinanceiro || '').trim();
+  await updateDoc(doc(db, 'chamados', ticket.id), { satisfactionTokenHash: tokenHash, satisfactionSurveyStatus: 'pending', satisfactionRequestedAt: new Date().toISOString(), satisfactionTechnicianId: ticket.tecnicoId || '', satisfactionTechnicianName: technicianName, satisfactionClientName: clientName, satisfactionOrigin: email && phone ? 'email_and_whatsapp' : email ? 'email' : 'whatsapp' });
+
+  let emailSent = false;
+  let whatsappSent = false;
+  const errors: string[] = [];
+  if (email) {
+    try {
+      const currentUser = auth.currentUser;
+      if (!currentUser) throw new Error('Sessão autenticada indisponível para envio do e-mail.');
+      const response = await fetch('/api/support/satisfaction-email', { method: 'POST', headers: { Authorization: `Bearer ${await currentUser.getIdToken()}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ ticketId: ticket.id, token }) });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.success) throw new Error(body.error || `Falha HTTP ${response.status} no envio do e-mail.`);
+      emailSent = true;
+      await appendHistory(ticket.id, { type: 'satisfaction_email', status: 'sent', createdAt: new Date().toISOString(), destinationMasked: body.destination || 'e-mail protegido' });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Falha no envio do e-mail.';
+      errors.push(reason);
+      await appendHistory(ticket.id, { type: 'satisfaction_email', status: 'error', createdAt: new Date().toISOString(), error: reason });
+    }
+  } else {
+    errors.push('Cliente sem e-mail cadastrado.');
+    await appendHistory(ticket.id, { type: 'satisfaction_email', status: 'error', createdAt: new Date().toISOString(), error: 'Cliente sem e-mail cadastrado.' });
   }
+
+  if (phone) {
+    try {
+      const result: any = await whatsappService.sendMessage(phone, message, 'Meu Mundo CRM', { satisfactionSurvey: true, ticketId: ticket.id, clientId: ticket.clienteId });
+      whatsappSent = true;
+      await appendHistory(ticket.id, { type: 'satisfaction_survey', status: 'sent', createdAt: new Date().toISOString(), destinationMasked: maskPhone(phone), messageId: result?.messageId || '' });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Falha no envio via WhatsApp.';
+      errors.push(reason);
+      await appendHistory(ticket.id, { type: 'satisfaction_survey', status: 'error', createdAt: new Date().toISOString(), destinationMasked: maskPhone(phone), error: reason });
+    }
+  } else {
+    errors.push('Cliente sem WhatsApp cadastrado.');
+    await appendHistory(ticket.id, { type: 'satisfaction_survey', status: 'error', createdAt: new Date().toISOString(), error: 'Cliente sem WhatsApp cadastrado.' });
+  }
+  if (!emailSent && !whatsappSent) await updateDoc(doc(db, 'chamados', ticket.id), { satisfactionSurveyStatus: 'send_failed' });
+  return { success: emailSent || whatsappSent, emailSent, whatsappSent, error: errors.join(' ') || undefined };
 }

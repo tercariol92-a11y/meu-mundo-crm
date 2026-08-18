@@ -12,6 +12,8 @@
     "start:fiscal:local": "node --env-file=.env.fiscal.local dist-fiscal/fiscalServer.mjs",
     "dev:fiscal:local": "node --env-file=.env.fiscal.local scripts/fiscal-local-dev.mjs",
     "test:fiscal:phase1": "tsx server/fiscal/tests/phase1.test.ts",
+    "test:nfe:phase1": "tsx server/nfe/tests/phase1.test.ts",
+    "test:nfe:xml": "tsx server/nfe/tests/xml-flow.test.ts",
     "audit:whatsapp-sessions": "tsx scripts/audit-whatsapp-session-isolation.ts",
     "start:whatsapp": "node dist-whatsapp/railwayServer.mjs",
     "start": "node dist/server.cjs",

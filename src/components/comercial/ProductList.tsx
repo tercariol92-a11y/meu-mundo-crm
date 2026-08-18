@@ -29,6 +29,7 @@ export default function ProductList({ user }: { user: Usuario }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Produto | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   const [formData, setFormData] = useState<Partial<Produto>>({
     nome: '',
@@ -41,6 +42,14 @@ export default function ProductList({ user }: { user: Usuario }) {
     valorVenda: 0,
     codigo: '',
     codigoBarras: '',
+    ncm: '',
+    unidadeTributavel: 'UN',
+    origemMercadoria: '0',
+    csosn: '102',
+    cest: '',
+    gtin: '',
+    pisCst: '',
+    cofinsCst: '',
     ativo: true,
     permiteVenda: true,
     permiteLocacao: false,
@@ -49,6 +58,7 @@ export default function ProductList({ user }: { user: Usuario }) {
   });
 
   const handleOpenModal = (product?: Produto) => {
+    setSaveError('');
     if (product) {
       setEditingProduct(product);
       setFormData(product);
@@ -65,6 +75,14 @@ export default function ProductList({ user }: { user: Usuario }) {
         valorVenda: 0,
         codigo: '',
         codigoBarras: '',
+        ncm: '',
+        unidadeTributavel: 'UN',
+        origemMercadoria: '0',
+        csosn: '102',
+        cest: '',
+        gtin: '',
+        pisCst: '',
+        cofinsCst: '',
         ativo: true,
         permiteVenda: true,
         permiteLocacao: false,
@@ -76,20 +94,39 @@ export default function ProductList({ user }: { user: Usuario }) {
   };
 
   const handleCloseModal = () => {
+    setSaveError('');
     setIsModalOpen(false);
     setEditingProduct(null);
   };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.nome || !formData.valorVenda) return;
+    const normalizedNcm = String(formData.ncm || '').replace(/\D/g, '');
+    if (!formData.nome) {
+      setSaveError('Informe o nome do produto.');
+      return;
+    }
+    if (!formData.valorVenda || formData.valorVenda <= 0) {
+      setSaveError('Informe um valor de venda maior que zero.');
+      return;
+    }
+    if (!/^\d{8}$/.test(normalizedNcm)) {
+      setSaveError('Informe um NCM válido com exatamente 8 dígitos.');
+      return;
+    }
+    const normalizedCest = String(formData.cest || '').replace(/\D/g, '');
+    if (formData.csosn === '202' && !/^\d{7}$/.test(normalizedCest)) {
+      setSaveError('O CSOSN 202 exige um CEST válido com exatamente 7 dígitos.');
+      return;
+    }
 
     try {
+      setSaveError('');
       setIsSaving(true);
       if (editingProduct) {
-        await databaseService.updateProduto(editingProduct.id, formData);
+        await databaseService.updateProduto(editingProduct.id, { ...formData, ncm: normalizedNcm, cest: normalizedCest });
       } else {
-        await databaseService.createProduto(formData as Omit<Produto, 'id' | 'createdAt' | 'updatedAt'>);
+        await databaseService.createProduto({ ...formData, ncm: normalizedNcm, cest: normalizedCest } as Omit<Produto, 'id' | 'createdAt' | 'updatedAt'>);
       }
       handleCloseModal();
     } catch (error) {
@@ -441,6 +478,111 @@ export default function ProductList({ user }: { user: Usuario }) {
                         />
                       </div>
                     </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant ml-1">NCM fiscal *</label>
+                      <input
+                        required
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={8}
+                        pattern="[0-9]{8}"
+                        className="w-full px-4 py-2.5 bg-surface-container-highest/30 border border-surface-container-high rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+                        value={formData.ncm || ''}
+                        onChange={(e) => setFormData({ ...formData, ncm: e.target.value.replace(/\D/g, '').slice(0, 8) })}
+                        placeholder="Ex: 85437099"
+                      />
+                      <p className="text-[10px] text-on-surface-variant">Obrigatório para emissão de NF-e. Confirme a classificação com a contabilidade.</p>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant ml-1">Origem da mercadoria *</label>
+                      <select
+                        required
+                        className="w-full px-4 py-2.5 bg-surface-container-highest/30 border border-surface-container-high rounded-xl text-sm"
+                        value={formData.origemMercadoria || '0'}
+                        onChange={(e) => setFormData({ ...formData, origemMercadoria: e.target.value as Produto['origemMercadoria'] })}
+                      >
+                        <option value="0">0 — Nacional</option>
+                        <option value="1">1 — Estrangeira, importação direta</option>
+                        <option value="2">2 — Estrangeira, adquirida no mercado interno</option>
+                        <option value="3">3 — Nacional, conteúdo de importação superior a 40%</option>
+                        <option value="4">4 — Nacional, processo produtivo básico</option>
+                        <option value="5">5 — Nacional, conteúdo de importação até 40%</option>
+                        <option value="6">6 — Estrangeira, importação direta sem similar</option>
+                        <option value="7">7 — Estrangeira, mercado interno sem similar</option>
+                        <option value="8">8 — Nacional, conteúdo de importação superior a 70%</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant ml-1">CSOSN *</label>
+                      <select
+                        required
+                        className="w-full px-4 py-2.5 bg-surface-container-highest/30 border border-surface-container-high rounded-xl text-sm"
+                        value={formData.csosn || '102'}
+                        onChange={(e) => setFormData({ ...formData, csosn: e.target.value as Produto['csosn'] })}
+                      >
+                        <option value="102">102 — Sem permissão de crédito, sem ST</option>
+                        <option value="202">202 — Sem permissão de crédito, com ST</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant ml-1">CEST {formData.csosn === '202' ? '*' : ''}</label>
+                      <input
+                        required={formData.csosn === '202'}
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={7}
+                        className="w-full px-4 py-2.5 bg-surface-container-highest/30 border border-surface-container-high rounded-xl text-sm"
+                        value={formData.cest || ''}
+                        onChange={(e) => setFormData({ ...formData, cest: e.target.value.replace(/\D/g, '').slice(0, 7) })}
+                        placeholder="Obrigatório para CSOSN 202"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant ml-1">Unidade tributável *</label>
+                      <input
+                        required
+                        type="text"
+                        maxLength={6}
+                        className="w-full px-4 py-2.5 bg-surface-container-highest/30 border border-surface-container-high rounded-xl text-sm uppercase"
+                        value={formData.unidadeTributavel || 'UN'}
+                        onChange={(e) => setFormData({ ...formData, unidadeTributavel: e.target.value.toUpperCase() })}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant ml-1">GTIN / EAN</label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="w-full px-4 py-2.5 bg-surface-container-highest/30 border border-surface-container-high rounded-xl text-sm"
+                        value={formData.gtin || ''}
+                        onChange={(e) => setFormData({ ...formData, gtin: e.target.value.replace(/\D/g, '').slice(0, 14) })}
+                        placeholder="Deixe vazio quando não houver GTIN"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant ml-1">CST PIS</label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={2}
+                        className="w-full px-4 py-2.5 bg-surface-container-highest/30 border border-surface-container-high rounded-xl text-sm"
+                        value={formData.pisCst || ''}
+                        onChange={(e) => setFormData({ ...formData, pisCst: e.target.value.replace(/\D/g, '').slice(0, 2) })}
+                        placeholder="Confirmar com a contabilidade"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant ml-1">CST COFINS</label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={2}
+                        className="w-full px-4 py-2.5 bg-surface-container-highest/30 border border-surface-container-high rounded-xl text-sm"
+                        value={formData.cofinsCst || ''}
+                        onChange={(e) => setFormData({ ...formData, cofinsCst: e.target.value.replace(/\D/g, '').slice(0, 2) })}
+                        placeholder="Confirmar com a contabilidade"
+                      />
+                    </div>
                   </div>
                 </section>
 
@@ -569,7 +711,13 @@ export default function ProductList({ user }: { user: Usuario }) {
                 </section>
               </form>
 
-              <div className="p-6 border-t border-surface-container-high bg-surface-container-highest/10 flex items-center justify-end gap-3">
+              <div className="p-6 border-t border-surface-container-high bg-surface-container-highest/10">
+                {saveError && (
+                  <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-bold text-rose-700">
+                    {saveError}
+                  </div>
+                )}
+                <div className="flex items-center justify-end gap-3">
                 <button
                   type="button"
                   onClick={handleCloseModal}
@@ -589,6 +737,7 @@ export default function ProductList({ user }: { user: Usuario }) {
                   )}
                   {editingProduct ? 'Salvar Alterações' : 'Cadastrar Produto'}
                 </button>
+                </div>
               </div>
             </motion.div>
           </>

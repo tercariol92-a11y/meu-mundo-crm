@@ -376,6 +376,16 @@ export interface Produto {
   valorVenda: number;
   codigo?: string;
   codigoBarras?: string;
+  /** NCM fiscal com 8 dígitos. Obrigatório para preparar NF-e de produto. */
+  ncm?: string;
+  /** Perfil fiscal do item usado pela NF-e modelo 55. */
+  unidadeTributavel?: string;
+  origemMercadoria?: '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8';
+  csosn?: '102' | '202';
+  cest?: string;
+  gtin?: string;
+  pisCst?: string;
+  cofinsCst?: string;
   ativo: boolean;
   permiteVenda: boolean;
   permiteLocacao?: boolean;
@@ -463,7 +473,7 @@ export interface Chamado {
   criadoPorNome?: string;
   criadoPorEmail?: string;
   communicationHistory?: Array<{
-    type: 'whatsapp_tecnico' | 'satisfaction_survey';
+    type: 'whatsapp_tecnico' | 'satisfaction_survey' | 'satisfaction_email';
     status: 'sent' | 'error';
     createdAt: string;
     destinationMasked?: string;
@@ -475,12 +485,20 @@ export interface Chamado {
   satisfactionTokenHash?: string;
   satisfactionRequestedAt?: string;
   satisfactionRating?: number;
+  satisfactionNps?: number;
+  satisfactionRatings?: {
+    technicalSupport: number;
+    services: number;
+    commercialSupport: number;
+    product: number;
+    administrative: number;
+  };
   satisfactionComment?: string;
   satisfactionAnsweredAt?: string;
   satisfactionTechnicianId?: string;
   satisfactionTechnicianName?: string;
   satisfactionClientName?: string;
-  satisfactionOrigin?: 'whatsapp';
+  satisfactionOrigin?: 'whatsapp' | 'email' | 'email_and_whatsapp' | 'public_link';
   // Joins
   cliente?: Cliente;
   unidade?: Unidade;
@@ -1397,6 +1415,12 @@ export interface NotaFiscalProduto {
   ncm: string;
   cfop: string;
   cstCsosn: string;
+  origemMercadoria?: string;
+  unidadeTributavel?: string;
+  cest?: string;
+  gtin?: string;
+  pisCst?: string;
+  cofinsCst?: string;
   valorProduto: number;
   frete: number;
   impostos: {
@@ -1410,7 +1434,11 @@ export interface NotaFiscalProduto {
   formaPagamento: 'Boleto' | 'Pix' | 'Cartao' | 'Dinheiro' | 'Outros';
   condicaoPagamento: 'A Vista' | '30 Dias' | '30/60 Dias' | 'Parcelado' | 'Outros';
   observacoes?: string;
-  status: 'Rascunho' | 'Emitida' | 'Cancelada' | 'Rejeitada' | 'Autorizada';
+  status: 'Rascunho' | 'Validando' | 'Assinando' | 'Enviando' | 'Processando' | 'Emitida' | 'Cancelada' | 'Rejeitada' | 'Autorizada' | 'Erro';
+  ambienteNfe?: 'homologacao' | 'producao';
+  protocoloAutorizacao?: string;
+  motivoRejeicao?: string;
+  idempotencyKey?: string;
   chaveAcesso?: string;
   xmlOriginal?: string;
   numeroNota: string;

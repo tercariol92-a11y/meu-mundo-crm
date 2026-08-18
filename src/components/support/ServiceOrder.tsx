@@ -632,7 +632,7 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
             <label className={labelClass}>Histórico de comunicações</label>
             <div className="space-y-2">
               {chamado.communicationHistory!.slice().reverse().map((entry, index) => <div key={`${entry.createdAt}-${index}`} className="rounded-2xl border border-surface-container-high bg-surface-container-low px-4 py-3 text-xs">
-                <div className="flex items-center justify-between gap-3"><span className="font-black uppercase tracking-wider">{entry.type === 'whatsapp_tecnico' ? 'WhatsApp técnico' : 'Pesquisa de satisfação'}</span><span className={entry.status === 'sent' ? 'font-bold text-emerald-700' : 'font-bold text-red-700'}>{entry.status === 'sent' ? 'Enviado' : 'Erro'}</span></div>
+                <div className="flex items-center justify-between gap-3"><span className="font-black uppercase tracking-wider">{entry.type === 'whatsapp_tecnico' ? 'WhatsApp técnico' : entry.type === 'satisfaction_email' ? 'Pesquisa por e-mail' : 'Pesquisa por WhatsApp'}</span><span className={entry.status === 'sent' ? 'font-bold text-emerald-700' : 'font-bold text-red-700'}>{entry.status === 'sent' ? 'Enviado' : 'Erro'}</span></div>
                 <p className="mt-1 text-on-surface-variant">{new Date(entry.createdAt).toLocaleString('pt-BR')}{entry.destinationMasked ? ` · ${entry.destinationMasked}` : ''}</p>
                 {entry.error && <p className="mt-1 text-red-700">{entry.error}</p>}
                 {entry.type === 'whatsapp_tecnico' && entry.status === 'error' && chamado.status !== 'concluido' && (
@@ -653,7 +653,7 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
 
         {/* Footer */}
         <div className="px-8 py-6 border-t border-surface-container-high bg-surface-container-low/50 flex flex-col gap-4">
-          {chamado.status !== 'concluido' && <label className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-900"><input type="checkbox" checked={sendSatisfactionSurvey} onChange={event => setSendSatisfactionSurvey(event.target.checked)} className="h-4 w-4 accent-emerald-600"/> Enviar pesquisa de satisfação ao cliente via WhatsApp após concluir</label>}
+          {chamado.status !== 'concluido' && <label className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-900"><input type="checkbox" checked={sendSatisfactionSurvey} onChange={event => setSendSatisfactionSurvey(event.target.checked)} className="h-4 w-4 accent-emerald-600"/> Enviar pesquisa de satisfação ao cliente por e-mail e WhatsApp após concluir</label>}
           <AnimatePresence>
             {error && (
               <motion.div 
