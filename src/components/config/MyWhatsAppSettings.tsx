@@ -43,7 +43,7 @@ export default function MyWhatsAppSettings() {
       applyStatus(body.status || {});
       if (body.status?.status === 'qrcode' && body.status?.qrCodeDataUrl) return 'qrcode';
       if (body.status?.status === 'connected') return 'connected';
-      if (body.status?.status === 'error') throw new Error(body.status?.lastError === 'QR_CODE_EXPIRED' ? 'O QR Code expirou. Gere um novo código.' : 'Não foi possível iniciar sua sessão do WhatsApp. Tente gerar um novo QR Code.');
+      if (body.status?.status === 'error') throw new Error(body.status?.lastError === 'QR_CODE_EXPIRED' ? 'O QR Code expirou. Gere um novo código.' : body.status?.lastError === 'QR_CODE_NOT_GENERATED' ? 'O WhatsApp não gerou o QR Code. Clique em Gerar novo QR Code.' : 'Não foi possível iniciar sua sessão do WhatsApp. Tente gerar um novo QR Code.');
     }
     throw new Error('Tempo esgotado aguardando o WhatsApp. Tente novamente.');
   };
@@ -125,9 +125,9 @@ export default function MyWhatsAppSettings() {
         </div>
 
         <div className="flex flex-wrap gap-3 justify-center">
-          {status === 'disconnected' ? (
+          {status !== 'connected' ? (
             <button onClick={() => startConnection('connect')} disabled={loading || !uid} className="px-6 py-2.5 bg-primary text-white text-xs font-black uppercase tracking-widest rounded-xl flex items-center gap-2 disabled:opacity-60">
-              {loading ? <Loader2 className="animate-spin" size={18} /> : <Power size={18} />} Gerar QR Code
+              {loading ? <Loader2 className="animate-spin" size={18} /> : <QrCode size={18} />} {status === 'disconnected' ? 'Gerar QR Code' : 'Gerar novo QR Code'}
             </button>
           ) : (
             <button onClick={() => startConnection('reconnect')} disabled={loading} className="px-6 py-2.5 bg-primary text-white text-xs font-black uppercase tracking-widest rounded-xl flex items-center gap-2 disabled:opacity-60">

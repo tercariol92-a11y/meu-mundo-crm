@@ -10,7 +10,7 @@ import type { Bucket } from '@google-cloud/storage';
 import { createSatisfactionRequest, detectSatisfactionScore, hasPendingSatisfactionRequest, processSatisfactionResponse } from './satisfactionService';
 
 export type SessionStatus = 'disconnected'|'connecting'|'qrcode'|'connected'|'error';
-export type WhatsAppSession = { userId:string; sessionId:string; socket:WASocket|null; status:SessionStatus; phone:string; qrCodeDataUrl:string; lastConnectedAt:string|null; reconnectAttempts:number; authDirectory:string; reconnectTimer?:ReturnType<typeof setTimeout>; qrExpiryTimer?:ReturnType<typeof setTimeout>; generation:number; createdAtMs:number; lastStatusAtMs:number; lastError:string };
+export type WhatsAppSession = { userId:string; sessionId:string; socket:WASocket|null; status:SessionStatus; phone:string; qrCodeDataUrl:string; lastConnectedAt:string|null; reconnectAttempts:number; authDirectory:string; reconnectTimer?:ReturnType<typeof setTimeout>; qrExpiryTimer?:ReturnType<typeof setTimeout>; connectTimeoutTimer?:ReturnType<typeof setTimeout>; generation:number; createdAtMs:number; lastStatusAtMs:number; lastError:string };
 const sessions = new Map<string,WhatsAppSession>();
 const activeSessionByUid = new Map<string,string>();
 const logger = pino({level:'silent'});
@@ -462,6 +462,7 @@ export async function connectWhatsApp(uid:string,force=false,resetCredentials=fa
   if(old?.socket&&!force&&!oldIsStale&&(old.status==='connected'||old.status==='connecting'||old.status==='qrcode'))return;
   if(old?.reconnectTimer)clearTimeout(old.reconnectTimer);
   if(old?.qrExpiryTimer)clearTimeout(old.qrExpiryTimer);
+  if(old?.connectTimeoutTimer)clearTimeout(old.connectTimeoutTimer);
   try{old?.socket?.ev.removeAllListeners();old?.socket?.end(undefined)}catch{}
   if(old)sessions.delete(old.sessionId);
   const authDirectory=path.join(ROOT,uid);
@@ -476,6 +477,12 @@ export async function connectWhatsApp(uid:string,force=false,resetCredentials=fa
   let version:Awaited<ReturnType<typeof fetchLatestWaWebVersion>>['version']|undefined;
   try{version=(await fetchLatestWaWebVersion({signal:AbortSignal.timeout(15_000)})).version}catch(error){console.warn('[WHATSAPP VERSION FALLBACK]',{firebaseUid:uid,error:error instanceof Error?error.message:'falha desconhecida'})}
   const socket=makeWASocket({...version?{version}:{},auth:auth.state,logger,browser:Browsers.macOS('Desktop'),printQRInTerminal:false,syncFullHistory:true,markOnlineOnConnect:false,shouldSyncHistoryMessage:()=>true});s.socket=socket;
+  s.connectTimeoutTimer=setTimeout(()=>{
+    if(!isCurrentSession(uid,s)||s.status!=='connecting')return;
+    try{s.socket?.ev.removeAllListeners();s.socket?.end(undefined)}catch{}
+    s.socket=null;s.status='error';s.lastStatusAtMs=Date.now();s.lastError='QR_CODE_NOT_GENERATED';
+    void saveSession(s);
+  },30_000);
   socket.ev.on('creds.update',auth.saveCreds);
   socket.ev.on('messaging-history.set',event=>{
     if(!isCurrentSession(uid,s))return;
@@ -486,12 +493,14 @@ export async function connectWhatsApp(uid:string,force=false,resetCredentials=fa
   socket.ev.on('connection.update',async u=>{
     if(!isCurrentSession(uid,s))return;
     if(u.qr){
+      if(s.connectTimeoutTimer)clearTimeout(s.connectTimeoutTimer);
       s.status='qrcode';s.lastStatusAtMs=Date.now();s.lastError='';s.qrCodeDataUrl=await QRCode.toDataURL(u.qr);
       if(s.qrExpiryTimer)clearTimeout(s.qrExpiryTimer);
       s.qrExpiryTimer=setTimeout(()=>{if(!isCurrentSession(uid,s)||s.status!=='qrcode')return;try{s.socket?.ev.removeAllListeners();s.socket?.end(undefined)}catch{}s.socket=null;s.status='error';s.lastStatusAtMs=Date.now();s.qrCodeDataUrl='';s.lastError='QR_CODE_EXPIRED';void saveSession(s)},90_000);
       void saveSession(s)
     }
     if(u.connection==='open'){
+      if(s.connectTimeoutTimer)clearTimeout(s.connectTimeoutTimer);
       if(s.qrExpiryTimer)clearTimeout(s.qrExpiryTimer);
       const oldSessionId=s.sessionId;s.phone=phoneOf(socket.user?.id||'');s.sessionId=sessionIdOf(uid,s.phone);
       sessions.delete(oldSessionId);sessions.set(s.sessionId,s);activeSessionByUid.set(uid,s.sessionId);
@@ -501,6 +510,7 @@ export async function connectWhatsApp(uid:string,force=false,resetCredentials=fa
       void saveSession(s);
     }
     if(u.connection==='close'){
+      if(s.connectTimeoutTimer)clearTimeout(s.connectTimeoutTimer);
       if(s.qrExpiryTimer)clearTimeout(s.qrExpiryTimer);
       const code=(u.lastDisconnect?.error as Boom)?.output?.statusCode;s.socket=null;s.status=code===DisconnectReason.loggedOut?'disconnected':'connecting';s.lastStatusAtMs=Date.now();void saveSession(s,String(code||''));
       if(code!==DisconnectReason.loggedOut&&s.reconnectAttempts<6){const delay=Math.min(1000*2**s.reconnectAttempts++,30000);s.reconnectTimer=setTimeout(()=>void connectWhatsApp(uid,true),delay)}
@@ -542,7 +552,7 @@ async function deleteSessionHistory(s:WhatsAppSession){
 export async function disconnectWhatsApp(uid:string,clear=true,clearHistory=true){
   const s=getWhatsAppSession(safeUid(uid));if(!s)return{sessionId:'',conversationsDeleted:0,messagesDeleted:0,mediaDeleted:0};
   console.log('[WHATSAPP DISCONNECT START]',{sessionId:s.sessionId,connectedPhone:s.phone});
-  if(s.reconnectTimer)clearTimeout(s.reconnectTimer);if(s.qrExpiryTimer)clearTimeout(s.qrExpiryTimer);try{s.socket?.ev.removeAllListeners();await s.socket?.logout()}catch{try{s.socket?.end(undefined)}catch{}}
+  if(s.reconnectTimer)clearTimeout(s.reconnectTimer);if(s.qrExpiryTimer)clearTimeout(s.qrExpiryTimer);if(s.connectTimeoutTimer)clearTimeout(s.connectTimeoutTimer);try{s.socket?.ev.removeAllListeners();await s.socket?.logout()}catch{try{s.socket?.end(undefined)}catch{}}
   s.socket=null;s.status='disconnected';s.qrCodeDataUrl='';
   const deleted=clearHistory?await deleteSessionHistory(s):{conversationsDeleted:0,messagesDeleted:0,mediaDeleted:0};
   await db.collection('whatsapp_sessions').doc(uid).delete().catch(()=>undefined);
