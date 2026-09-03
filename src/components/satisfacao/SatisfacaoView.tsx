@@ -12,12 +12,17 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Clock,
-  ChevronDown
+  ChevronDown,
+  Trash2
 } from 'lucide-react';
 import { format, subDays, isWithinInterval, parseISO, startOfDay, endOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'framer-motion';
 import { databaseService } from '../../services/databaseService';
+import { auth } from '../../firebase';
+import { Usuario } from '../../types';
+import ConfirmationModal from '../ConfirmationModal';
+import toast from 'react-hot-toast';
 
 interface Survey {
   id: string;
@@ -34,12 +39,37 @@ interface Survey {
   ratings?: Record<string, number>;
 }
 
-const SatisfacaoView: React.FC = () => {
+const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
   const [surveys, setSurveys] = useState<Survey[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterPeriod, setFilterPeriod] = useState('30'); // days
   const [filterNote, setFilterNote] = useState('todos');
   const [searchTerm, setSearchTerm] = useState('');
+  const [surveyToDelete, setSurveyToDelete] = useState<Survey | null>(null);
+  const [deletingSurveyId, setDeletingSurveyId] = useState('');
+  const isAdmin = user.role === 'admin' || user.roles?.includes('admin');
+
+  const deleteSurvey = async () => {
+    if (!surveyToDelete || !isAdmin || deletingSurveyId) return;
+    setDeletingSurveyId(surveyToDelete.id);
+    try {
+      const idToken = await auth.currentUser?.getIdToken();
+      if (!idToken) throw new Error('Sessão não autenticada. Entre novamente no sistema.');
+      const response = await fetch('/api/support/satisfaction-review', {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${idToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewId: surveyToDelete.id }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `Falha ao excluir a avaliação (HTTP ${response.status}).`);
+      toast.success('Avaliação excluída com sucesso.');
+      setSurveyToDelete(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível excluir a avaliação.');
+    } finally {
+      setDeletingSurveyId('');
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = databaseService.onSurveysChange((data) => {
@@ -294,12 +324,13 @@ const SatisfacaoView: React.FC = () => {
                     <th className="px-6 py-3 font-semibold">Atendente</th>
                     <th className="px-6 py-3 font-semibold">Técnico</th>
                     <th className="px-6 py-3 font-semibold">Data</th>
+                    {isAdmin && <th className="px-6 py-3 font-semibold text-center">Ação</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 text-sm">
                   {filteredSurveys.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="px-6 py-10 text-center text-gray-400">
+                      <td colSpan={isAdmin ? 6 : 5} className="px-6 py-10 text-center text-gray-400">
                         Nenhuma avaliação encontrada para os filtros selecionados
                       </td>
                     </tr>
@@ -334,6 +365,20 @@ const SatisfacaoView: React.FC = () => {
                         <td className="px-6 py-4 text-gray-500 text-xs">
                           {survey.createdAt ? format(parseISO(survey.createdAt), 'dd/MM/yyyy HH:mm', { locale: ptBR }) : '-'}
                         </td>
+                        {isAdmin && (
+                          <td className="px-6 py-4 text-center">
+                            <button
+                              type="button"
+                              onClick={() => setSurveyToDelete(survey)}
+                              disabled={deletingSurveyId === survey.id}
+                              title="Excluir avaliação"
+                              aria-label={`Excluir avaliação de ${survey.clienteNome}`}
+                              className="inline-flex items-center justify-center rounded-lg p-2 text-red-600 transition-colors hover:bg-red-50 disabled:cursor-wait disabled:opacity-50"
+                            >
+                              <Trash2 size={17} />
+                            </button>
+                          </td>
+                        )}
                       </motion.tr>
                     ))
                   )}
@@ -406,6 +451,16 @@ const SatisfacaoView: React.FC = () => {
           </div>
         </div>
       </div>
+      <ConfirmationModal
+        isOpen={Boolean(surveyToDelete)}
+        onClose={() => !deletingSurveyId && setSurveyToDelete(null)}
+        onConfirm={() => void deleteSurvey()}
+        title="Excluir avaliação"
+        message={`Deseja excluir a avaliação de ${surveyToDelete?.clienteNome || 'este cliente'}? Esta ação removerá a resposta dos indicadores e ficará registrada na auditoria.`}
+        confirmText={deletingSurveyId ? 'Excluindo...' : 'Excluir avaliação'}
+        cancelText="Cancelar"
+        variant="danger"
+      />
     </div>
   );
 };

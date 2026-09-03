@@ -292,7 +292,7 @@ function AppContent() {
       case 'atendimento':
         return <AtendimentoView user={internalUser} onViewChange={setCurrentView} />;
       case 'satisfacao':
-        return <SatisfacaoView />;
+        return <SatisfacaoView user={internalUser} />;
       case 'tecnicos':
         return <TecnicoList user={internalUser} />;
       case 'gemini-assistant':
