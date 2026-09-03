@@ -1,6 +1,19 @@
+import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
-import { FieldValue } from 'firebase-admin/firestore';
-import { getDb } from '../lib/db.js';
+import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+
+const APP_NAME = 'support-satisfaction-review-api';
+const FIRESTORE_DATABASE_ID = 'ai-studio-deb852ec-3d57-481f-a30e-1461a2294d90';
+
+function adminApp() {
+  const existing = getApps().find(app => app.name === APP_NAME);
+  if (existing) return existing;
+  const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+  if (!projectId || !clientEmail || !privateKey) throw new Error('Firebase Admin não configurado.');
+  return initializeApp({ credential: cert({ projectId, clientEmail, privateKey }), projectId }, APP_NAME);
+}
 
 const companyIdOf = (value: any) => String(value?.companyId || value?.tenantId || value?.empresaId || '').trim();
 
@@ -17,9 +30,9 @@ export default async function handler(req: any, res: any) {
       return res.status(401).json({ success: false, error: 'Sessão não autenticada.' });
     }
 
-    const db = getDb();
-    if (!db) throw new Error('Banco de dados indisponível.');
-    const decoded = await getAuth().verifyIdToken(authorization.slice(7));
+    const app = adminApp();
+    const db = getFirestore(app, FIRESTORE_DATABASE_ID);
+    const decoded = await getAuth(app).verifyIdToken(authorization.slice(7));
 
     const userSnapshot = await db.collection('usuarios').doc(decoded.uid).get();
     const user = userSnapshot.exists ? userSnapshot.data() || {} : {};
