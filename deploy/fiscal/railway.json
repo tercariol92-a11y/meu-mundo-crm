@@ -1,6 +1,6 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
-  "build": { "buildCommand": "npm ci && npm run build:fiscal" },
+  "build": { "buildCommand": "npm run build:fiscal" },
   "deploy": {
     "startCommand": "npm run start:fiscal",
     "healthcheckPath": "/health",
