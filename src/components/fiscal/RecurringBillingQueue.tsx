@@ -36,6 +36,7 @@ export default function RecurringBillingQueue({ user, contracts, clients, config
   const [confirming, setConfirming] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [message, setMessage] = useState('');
+  const [certificatePassword, setCertificatePassword] = useState('');
   const [editing, setEditing] = useState<FaturamentoRecorrente | null>(null);
   const [clientDraft, setClientDraft] = useState<Partial<Cliente>>({});
   const [fiscalDraft, setFiscalDraft] = useState<NonNullable<ContratoRecorrente['fiscal']> | null>(null);
@@ -44,7 +45,7 @@ export default function RecurringBillingQueue({ user, contracts, clients, config
   const [documentLoading, setDocumentLoading] = useState('');
   const [selectedDocuments, setSelectedDocuments] = useState<string[]>([]);
   const [batchSummary, setBatchSummary] = useState<{ processed: number; authorized: number; errors: number; billedAmount: number; items: FaturamentoRecorrente[]; failures: Array<{ id: string; contractNumber: string; clientName: string; code?: string; message: string }> } | null>(null);
-  const companyId = user.companyId || 'default';
+  const companyId = user.companyId || user.tenantId || user.empresaId || 'default';
   const competence = new Date().toISOString().slice(0, 7);
 
   const refresh = async () => {
@@ -107,9 +108,27 @@ export default function RecurringBillingQueue({ user, contracts, clients, config
   };
 
   const processSequentially = async () => {
-    if (!credentialsRef.current) { setMessage('Valide a senha do certificado A1 uma única vez antes de iniciar o lote.'); return; }
     if (!config) { setMessage('Configuração fiscal da empresa indisponível.'); return; }
     setProcessing(true); setMessage('');
+    const enteredPassword = certificatePassword.trim();
+    const credentials = enteredPassword
+      ? { useStoredCertificate: true, password: enteredPassword, expectedCnpj: config.cnpj }
+      : (credentialsRef.current || (config.certificadoDigitalNome ? { useStoredCertificate: true, expectedCnpj: config.cnpj } : null));
+    if (!credentials) {
+      setProcessing(false);
+      setMessage('Informe a senha do certificado A1 ou cadastre o certificado antes de iniciar o lote.');
+      return;
+    }
+    try {
+      // Valida o A1 antes de alterar qualquer cobrança para EM_PROCESSAMENTO.
+      // A senha permanece apenas na memória desta tela durante o lote.
+      await fiscalApi.validateStoredCertificate(credentials);
+      credentialsRef.current = credentials;
+    } catch (error) {
+      setProcessing(false);
+      setMessage(error instanceof Error ? `Não foi possível liberar o certificado A1: ${error.message}` : 'Não foi possível liberar o certificado A1.');
+      return;
+    }
     const processedItems: FaturamentoRecorrente[] = [];
     let authorizedCount = 0;
     let errorCount = 0;
@@ -125,7 +144,7 @@ export default function RecurringBillingQueue({ user, contracts, clients, config
       try {
         await updateRecurringBilling(billing.id, { status: 'EM_PROCESSAMENTO' });
         const fiscal = billing.fiscalSnapshot as any;
-        const draft = buildValidatedNfseDraft({ client, config, description: billing.description, amount: billing.expectedAmount, competence: billing.competence, issWithheld: fiscal.issRetido === true, credentials: credentialsRef.current, recurring: billing });
+        const draft = buildValidatedNfseDraft({ client, config, description: billing.description, amount: billing.expectedAmount, competence: billing.competence, issWithheld: fiscal.issRetido === true, credentials, recurring: billing });
         const result: any = await issueNfseWithValidatedEngine(draft);
         if (result?.result !== 'AUTORIZADA' || !result?.accessKey) throw Object.assign(new Error(result?.message || 'NFS-e não autorizada.'), { code: result?.code });
         const authorizedItem = { ...billing, status: 'AUTORIZADA', nfseNumber: result.nfseNumber, dpsNumber: result.dpsId, officialAccessKey: result.accessKey, authorizedAt: new Date().toISOString(), authorizedXml: result.xmlStored ? 'private' : undefined, danfseReference: result.danfseAvailable ? result.accessKey : undefined } as FaturamentoRecorrente;
@@ -147,7 +166,7 @@ export default function RecurringBillingQueue({ user, contracts, clients, config
       }
     }
     setBatchSummary({ processed: chosen.length, authorized: authorizedCount, errors: errorCount, billedAmount, items: processedItems, failures });
-    setConfirming(false); setSelected([]); setProcessing(false); await refresh(); await Promise.resolve(onCompleted?.());
+    setCertificatePassword(''); setConfirming(false); setSelected([]); setProcessing(false); await refresh(); await Promise.resolve(onCompleted?.());
   };
 
   const inputClass = (bad: boolean) => `w-full rounded-lg border px-3 py-2 text-xs outline-none ${bad ? 'border-rose-300 bg-rose-50' : 'border-slate-200 bg-white'}`;
@@ -213,7 +232,7 @@ export default function RecurringBillingQueue({ user, contracts, clients, config
     {!!authorizedDocuments.length && <div className="flex flex-wrap items-center gap-2 border-t border-blue-100 bg-white p-4"><span className="mr-auto text-xs font-bold text-slate-600">{authorizedDocuments.length} NFS-e selecionada(s)</span><button disabled={!!documentLoading} onClick={() => void downloadSelected('danfse')} className="rounded-lg border px-3 py-2 text-xs font-bold"><Download size={14} className="mr-1 inline"/>Baixar DANFSe selecionadas</button><button disabled={!!documentLoading} onClick={() => void downloadSelected('xml')} className="rounded-lg border px-3 py-2 text-xs font-bold"><Download size={14} className="mr-1 inline"/>Baixar XML selecionados</button><button disabled={!!documentLoading} onClick={() => void printSelected()} className="rounded-lg border px-3 py-2 text-xs font-bold"><Printer size={14} className="mr-1 inline"/>Imprimir selecionadas</button></div>}
     {batchSummary && <div className={`border-t p-4 ${batchSummary.errors ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}><h4 className={`font-extrabold ${batchSummary.errors ? 'text-rose-900' : 'text-emerald-900'}`}>{batchSummary.errors ? 'Faturamento concluído com erros' : 'Faturamento concluído'}</h4><div className={`mt-2 grid gap-2 text-xs ${batchSummary.errors ? 'text-rose-900' : 'text-emerald-900'} sm:grid-cols-2 lg:grid-cols-4`}><span>{batchSummary.processed} contratos processados</span><span>{batchSummary.authorized} NFS-e autorizadas</span><span>{batchSummary.errors} com erro</span><span>Valor faturado: R$ {batchSummary.billedAmount.toLocaleString('pt-BR',{minimumFractionDigits:2})}</span></div>{!!batchSummary.failures.length && <div className="mt-4 overflow-hidden rounded-xl border border-rose-200 bg-white"><div className="border-b border-rose-100 px-3 py-2 text-xs font-extrabold text-rose-900">Motivos das falhas e como corrigir</div><div className="max-h-80 divide-y divide-rose-100 overflow-y-auto">{batchSummary.failures.map(failure => { const guidance = failureGuidance(failure.code, failure.message); const billing = items.find(item => item.id === failure.id); return <div key={failure.id} className="p-3 text-xs"><div className="font-bold text-slate-800">{failure.clientName} · {failure.contractNumber}</div><div className="mt-1 font-semibold text-rose-700">{failure.code ? `[${failure.code}] ` : ''}{failure.message}</div><div className="mt-2 rounded-lg bg-amber-50 p-2 text-amber-900"><strong>O que arrumar:</strong> {guidance.title}. {guidance.detail}</div>{billing && <button type="button" onClick={() => openIssues(billing)} className="mt-2 rounded-lg bg-rose-700 px-3 py-2 font-bold text-white">CORRIGIR E REVALIDAR</button>}</div>})}</div></div>}{!!batchSummary.items.length && <button onClick={() => setSelectedDocuments(batchSummary.items.map(item => item.id))} className="mt-3 text-xs font-bold text-emerald-800 underline">Selecionar documentos autorizados deste lote</button>}</div>}
     {message && <p className="p-3 text-xs font-bold text-amber-700 bg-amber-50 border-t">{message}</p>}
-    {confirming && <div className="p-4 border-t border-blue-200 bg-white"><p className="font-bold">Confirmar emissão individual sequencial</p><p className="text-xs mt-1">Quantidade: {chosen.length} · Total: R$ {total.toLocaleString('pt-BR',{minimumFractionDigits:2})}</p><div className="mt-3 flex gap-2"><button disabled={processing} onClick={() => setConfirming(false)} className="px-3 py-2 border rounded-lg text-xs font-bold">VOLTAR</button><button disabled={processing} onClick={() => void processSequentially()} className="px-3 py-2 bg-slate-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">{processing ? 'PROCESSANDO UMA POR VEZ...' : 'CONFIRMAR EMISSÃO'}</button></div></div>}
+    {confirming && <div className="p-4 border-t border-blue-200 bg-white"><p className="font-bold">Confirmar emissão individual sequencial</p><p className="text-xs mt-1">Quantidade: {chosen.length} · Total: R$ {total.toLocaleString('pt-BR',{minimumFractionDigits:2})}</p><label className="mt-3 block max-w-sm text-xs font-bold text-slate-700">Senha do certificado A1 <input type="password" value={certificatePassword} onChange={event => setCertificatePassword(event.target.value)} autoComplete="off" placeholder="Digite somente se o cofre não liberar automaticamente" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-normal outline-none focus:border-blue-500" /></label><p className="mt-1 text-[10px] text-slate-500">A senha não é gravada no navegador nem no cadastro; ela permanece somente na memória durante este lote.</p><div className="mt-3 flex gap-2"><button disabled={processing} onClick={() => { setCertificatePassword(''); setConfirming(false); }} className="px-3 py-2 border rounded-lg text-xs font-bold">VOLTAR</button><button disabled={processing} onClick={() => void processSequentially()} className="px-3 py-2 bg-slate-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">{processing ? 'VALIDANDO A1 E PROCESSANDO...' : 'CONFIRMAR EMISSÃO'}</button></div></div>}
 
     {editing && <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/45 p-4"><div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white shadow-2xl"><div className="sticky top-0 z-10 flex items-center justify-between border-b bg-white p-5"><div><h2 className="font-extrabold text-slate-900">Pendências para emissão da NFS-e</h2><p className="text-xs text-slate-500">{editing.clientName} · {editing.contractNumber}</p></div><button onClick={() => setEditing(null)}><X size={20}/></button></div>
       <div className="p-5">{editing.sefinError && <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900"><div className="font-extrabold">Erro retornado pela SEFIN {editing.sefinError.code ? `· ${editing.sefinError.code}` : ''}</div><div className="mt-1">{editing.sefinError.message}</div><div className="mt-2 text-xs"><strong>Orientação:</strong> {failureGuidance(editing.sefinError.code, editing.sefinError.message).detail}</div></div>}<div className="mb-5 space-y-2 rounded-xl border p-4">{issues.length ? issues.map(issue => <div key={issue.key} className="flex items-center gap-2 text-sm text-rose-700"><AlertTriangle size={15}/><span>{issue.label}</span><span className="ml-auto text-[10px] uppercase text-slate-400">Salvar em {issue.origin === 'cliente' ? 'Dados do cliente' : issue.origin === 'contrato' ? 'Dados fiscais do contrato' : 'Configuração fiscal'}</span></div>) : <div className="flex items-center gap-2 text-emerald-700"><CheckCircle2 size={16}/> Todos os dados locais estão válidos. Salve para liberar uma nova tentativa manual.</div>}</div>

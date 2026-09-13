@@ -119,13 +119,15 @@ async function protect(req: any, res: any, next: any) {
     if (req.body?.useStoredCertificate === true) {
       try {
         const { certificatePath, passwordPath } = getStoredCertificatePath(companyId);
-        const [storedPfx, encryptedPassword] = await Promise.all([readFile(certificatePath), readFile(passwordPath)]);
+        const storedPfx = await readFile(certificatePath);
+        const suppliedPassword = String(req.body?.password || '');
+        const password = suppliedPassword || decryptCertificatePassword(await readFile(passwordPath));
         req.body = {
           ...req.body,
           fileName: 'active.pfx',
           mimeType: 'application/x-pkcs12',
           certificateBase64: storedPfx.toString('base64'),
-          password: decryptCertificatePassword(encryptedPassword),
+          password,
         };
       } catch (error: any) {
         if (error?.code === 'ENOENT') return res.status(404).json({ success: false, code: 'STORED_CERTIFICATE_NOT_FOUND', error: 'O certificado A1 não está no armazenamento persistente. Selecione o arquivo uma vez para salvá-lo.' });
