@@ -2,6 +2,9 @@
   "name": "mundo-tech-service",
   "private": true,
   "version": "1.0.0",
+  "engines": {
+    "node": ">=22"
+  },
   "main": "expo-router/entry",
   "scripts": {
     "dev": "tsx server.ts",
