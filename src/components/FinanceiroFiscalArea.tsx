@@ -156,6 +156,13 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
         certificadoVencimento: fiscalConfigData.certificadoVencimento || fiscalConfigData.certificateValidTo?.slice(0, 10),
         ambiente: 'Homologação',
         provedorFiscal: 'sefin_nacional',
+        nfeSerie: fiscalConfigData.nfeSerie || '1',
+        nfeProximoNumero: Number(fiscalConfigData.nfeProximoNumero || 32),
+        nfeLogradouro: fiscalConfigData.nfeLogradouro || 'Avenida Marechal Floriano Peixoto',
+        nfeNumero: fiscalConfigData.nfeNumero || '10170',
+        nfeBairro: fiscalConfigData.nfeBairro || 'Boqueirão',
+        nfeCep: fiscalConfigData.nfeCep || '81670000',
+        nfeUf: fiscalConfigData.nfeUf || 'PR',
       } : { id:'config', cnpj:'', razaoSocial:'', inscricaoEstadual:'', inscricaoMunicipal:'', regimeTributario:'Simples Nacional', ambiente:'Homologação', municipio:'', codigoIbge:'', provedorFiscal:'sefin_nacional' });
       setAuditLogs(auditLogsData || []);
       setContracts((await databaseService.getContratosRecorrentes?.()) || []);
@@ -2095,6 +2102,18 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                         className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5 focus:ring-1"
                       />
                     </div>
+
+                    <div className="sm:col-span-2 mt-2 border-t border-slate-200 pt-4">
+                      <p className="text-xs font-extrabold text-slate-700 uppercase">Numeração e endereço da NF-e de produto</p>
+                      <p className="text-[10px] text-amber-700 mt-1">Dados exclusivos da NF-e modelo 55. A primeira transmissão será feita em homologação.</p>
+                    </div>
+                    <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Série NF-e</label><input value={configFiscal.nfeSerie || '1'} onChange={e => setConfigFiscal({...configFiscal, nfeSerie:e.target.value.replace(/\D/g, '')})} disabled={!canSetConfig} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
+                    <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Próximo número</label><input type="number" min="1" value={configFiscal.nfeProximoNumero || 32} onChange={e => setConfigFiscal({...configFiscal, nfeProximoNumero:Number(e.target.value)})} disabled={!canSetConfig} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
+                    <div className="sm:col-span-2"><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Logradouro do emitente</label><input value={configFiscal.nfeLogradouro || ''} onChange={e => setConfigFiscal({...configFiscal, nfeLogradouro:e.target.value})} disabled={!canSetConfig} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
+                    <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Número</label><input value={configFiscal.nfeNumero || ''} onChange={e => setConfigFiscal({...configFiscal, nfeNumero:e.target.value})} disabled={!canSetConfig} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
+                    <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Bairro</label><input value={configFiscal.nfeBairro || ''} onChange={e => setConfigFiscal({...configFiscal, nfeBairro:e.target.value})} disabled={!canSetConfig} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
+                    <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">CEP</label><input value={configFiscal.nfeCep || ''} onChange={e => setConfigFiscal({...configFiscal, nfeCep:e.target.value.replace(/\D/g, '')})} disabled={!canSetConfig} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
+                    <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">UF</label><input maxLength={2} value={configFiscal.nfeUf || 'PR'} onChange={e => setConfigFiscal({...configFiscal, nfeUf:e.target.value.toUpperCase()})} disabled={!canSetConfig} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
                   </div>
 
                   <div className="bg-slate-50 p-4.5 rounded-xl border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">

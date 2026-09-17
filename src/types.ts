@@ -1579,6 +1579,13 @@ export interface ConfiguracaoFiscal {
   certificadoDigitalNome?: string;
   certificadoVencimento?: string;
   ambiente: 'Homologação' | 'Produção';
+  nfeSerie?: string;
+  nfeProximoNumero?: number;
+  nfeLogradouro?: string;
+  nfeNumero?: string;
+  nfeBairro?: string;
+  nfeCep?: string;
+  nfeUf?: string;
   updatedAt?: string;
 }
 
