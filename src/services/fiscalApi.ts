@@ -101,6 +101,7 @@ export const fiscalApi = {
   prepareFinalNfse: (body: Record<string, unknown>) => callFiscal('/api/fiscal/nfse-prepare-final', body),
   issueNfse: (body: Record<string, unknown>) => callFiscal('/api/fiscal/nfse-issue', body),
   issueRestrictedNfse: (body: Record<string, unknown>) => callFiscal('/api/fiscal/nfse-issue-restricted', body),
+  issueNfe: (body: Record<string, unknown>) => callFiscal('/api/fiscal/nfe-issue', { ...body, useStoredCertificate: true }),
   transmitFirstRestrictedDps: (body: Record<string, unknown>) => callFiscal('/api/fiscal/phase3-transmit-first', body),
   reconcileAuthorizedNfse: (accessKey?: string) => callFiscal('/api/fiscal/nfse-reconcile', accessKey ? { accessKey } : {}),
   downloadAuthorizedXml: async (accessKey: string) => downloadBase64File(await callFiscalGet(`/api/fiscal/nfse-xml?accessKey=${encodeURIComponent(accessKey)}`)),

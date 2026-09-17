@@ -18,6 +18,9 @@ import { prepareRestrictedNfseRequest, RESTRICTED_NFSE_ENDPOINT, transmitPrepare
 import { downloadRestrictedDanfse, parseAuthorizedNfseXml, persistAuthorizedNfse } from './postAuthorization/authorizedNfse';
 import { consultOfficialCancellation, interpretOfficialCancellationResponse, prepareCancellationEvent, PRODUCTION_EVENTS_ENDPOINT_TEMPLATE, transmitPreparedCancellationEvent } from './cancellation/cancellationEvent';
 import { DANFSE_LAYOUT_VERSION, generateDanfseV2FromAuthorizedXml } from './danfse/danfseV2';
+import { prepareNfeAuthorization } from '../nfe/application/prepareAuthorization';
+import { authorizeNfeBatch } from '../nfe/soap/authorizationClient';
+import { parseAuthorizationResponse } from '../nfe/soap/responseParser';
 
 const PORT = Number(process.env.PORT || process.env.FISCAL_PORT || 3002);
 const FIREBASE_DATABASE_ID = process.env.FIREBASE_DATABASE_ID?.trim() || 'ai-studio-deb852ec-3d57-481f-a30e-1461a2294d90';
@@ -172,6 +175,18 @@ app.post('/api/fiscal/certificate/stored/validate', protect, async (req: any, re
     cnpj: parsed.metadata.cnpj,
   });
   res.json({ success: true, data: parsed.metadata });
+} catch (error) { next(error); } });
+
+app.post('/api/fiscal/nfe/issue', protect, async (req: any, res, next) => { try {
+  if (req.body?.confirmTransmission !== true) throw Object.assign(new Error('Confirmação explícita da transmissão obrigatória.'), { status: 400, code: 'NFE_CONFIRMATION_REQUIRED' });
+  const input = readCertificate(req.body);
+  const parsedCertificate = parsePkcs12(input.buffer, input.password, String(req.body?.expectedCnpj || ''));
+  const prepared = await prepareNfeAuthorization({ input: req.body.nfe, privateKeyPem: parsedCertificate.privateKeyPem, certificatePem: parsedCertificate.certificatePem, batchId: String(req.body.batchId || Date.now()).slice(-15) });
+  const response = await authorizeNfeBatch({ environment: prepared.environment, endpoint: prepared.endpoint, batchXml: prepared.batchXml, credentials: { pfx: parsedCertificate.pfx, passphrase: parsedCertificate.passphrase } });
+  const result = parseAuthorizationResponse(response.body);
+  if (req.body?.draftId) await req.fiscal.db.collection('notas_fiscais_produto').doc(String(req.body.draftId)).set({ status: result.authorized ? 'Autorizada' : 'Rejeitada', ambienteNfe: prepared.environment, numeroNota: String(req.body.nfe.number), serie: String(req.body.nfe.series), chaveAcesso: result.accessKey || prepared.accessKey, protocoloAutorizacao: result.protocol || null, motivoRejeicao: result.authorized ? null : `${result.cStat} - ${result.xMotivo}`, xmlOriginal: prepared.signedXml, sefazResponseXml: result.rawXml, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+  await writeFiscalAudit(req.fiscal.db, req.fiscal.companyId, req.fiscal.decoded.uid, 'nfe_transmission', { environment: prepared.environment, number: req.body.nfe.number, series: req.body.nfe.series, authorized: result.authorized, cStat: result.cStat, accessKey: result.accessKey || prepared.accessKey });
+  res.status(result.authorized ? 200 : 422).json({ success: result.authorized, code: result.authorized ? undefined : 'NFE_REJECTED', error: result.authorized ? undefined : result.xMotivo, data: { ...result, environment: prepared.environment, accessKey: result.accessKey || prepared.accessKey } });
 } catch (error) { next(error); } });
 
 app.post('/api/fiscal/certificate/validate', protect, async (req: any, res, next) => {
