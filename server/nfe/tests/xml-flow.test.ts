@@ -57,8 +57,10 @@ async function main() {
   process.env.NFE_TRANSMISSION_ENABLED = 'false';
   await assert.rejects(() => authorizeNfeBatch({ environment: 'homologacao', endpoint: 'https://homologacao.nfe.sefa.pr.gov.br/nfe/NFeAutorizacao4', batchXml: batch, credentials: { pfx: Buffer.from('not-used'), passphrase: 'not-used' } }), /bloqueada/);
 
-  const parsed = parseAuthorizationResponse('<?xml version="1.0"?><retEnviNFe xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00"><tpAmb>2</tpAmb><cStat>100</cStat><xMotivo>Autorizado o uso da NF-e</xMotivo><protNFe><infProt><chNFe>41123456789012345678901234567890123456789012</chNFe><nProt>141260000000001</nProt></infProt></protNFe></retEnviNFe>');
+  const parsed = parseAuthorizationResponse('<?xml version="1.0"?><retEnviNFe xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00"><tpAmb>2</tpAmb><cStat>104</cStat><xMotivo>Lote processado</xMotivo><protNFe><infProt><cStat>100</cStat><xMotivo>Autorizado o uso da NF-e</xMotivo><chNFe>41123456789012345678901234567890123456789012</chNFe><nProt>141260000000001</nProt></infProt></protNFe></retEnviNFe>');
   assert.equal(parsed.authorized, true);
+  assert.equal(parsed.cStat, '100');
+  assert.equal(parsed.xMotivo, 'Autorizado o uso da NF-e');
   assert.equal(parsed.protocol, '141260000000001');
 
   process.env.NFE_ENVIRONMENT = 'homologacao';
