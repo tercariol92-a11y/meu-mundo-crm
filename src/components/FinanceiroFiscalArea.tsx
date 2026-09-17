@@ -42,6 +42,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('todos');
   const [transmittingNfeId, setTransmittingNfeId] = useState<string | null>(null);
+  const [pendingNfeTransmission, setPendingNfeTransmission] = useState<NotaFiscalProduto | null>(null);
   const [auditSearch, setAuditSearch] = useState('');
   const [auditTypeFilter, setAuditTypeFilter] = useState('todos');
 
@@ -1055,16 +1056,25 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
     const client = clientes.find(item => item.id === nf.clienteId);
     if (!client) return showToast('Cliente da NF-e não encontrado.', 'error');
     if (!client.codigoIbge || !client.cep || !client.rua || !client.numero || !client.bairro || !client.cidade || !client.estado) return showToast('Complete o endereço fiscal e o código IBGE do cliente antes de transmitir.', 'error');
-    if (!window.confirm(`Transmitir NF-e ${configFiscal.nfeProximoNumero || 32}, série ${configFiscal.nfeSerie || 1}, em HOMOLOGAÇÃO para ${nf.clienteNome}, valor ${formatToBRL(nf.valorProduto + (nf.frete || 0))}?`)) return;
+    if (pendingNfeTransmission?.id !== nf.id) return;
+    setPendingNfeTransmission(null);
     setTransmittingNfeId(nf.id);
     try {
       const total = nf.valorProduto + (nf.frete || 0);
-      const issuedAt = new Date().toISOString().replace('Z', '-03:00');
+      const issuedAt = `${new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date()).replace(' ', 'T')}-03:00`;
       const result = await fiscalApi.issueNfe({ draftId: nf.id, confirmTransmission: true, expectedCnpj: configFiscal.cnpj, batchId: String(Date.now()).slice(-15), nfe: { environment: 'homologacao', series: Number(configFiscal.nfeSerie || 1), number: Number(configFiscal.nfeProximoNumero || 32), numericCode: String(Date.now()).slice(-8), issuedAt, issuer: { cnpj: configFiscal.cnpj, legalName: configFiscal.razaoSocial, tradeName: configFiscal.nomeFantasia, stateRegistration: configFiscal.inscricaoEstadual, municipalRegistration: configFiscal.inscricaoMunicipal, crt: '1', address: { street: configFiscal.nfeLogradouro, number: configFiscal.nfeNumero, district: configFiscal.nfeBairro, cityCode: configFiscal.codigoIbge, city: configFiscal.municipio, state: configFiscal.nfeUf || 'PR', zipCode: configFiscal.nfeCep } }, recipient: { cnpj: client.cnpj, legalName: client.razaoSocial || client.nomeFantasia, stateRegistration: client.inscricaoEstadual, email: client.emailPrincipal, ieIndicator: client.inscricaoEstadual ? '1' : '9', address: { street: client.rua, number: client.numero, district: client.bairro, cityCode: client.codigoIbge, city: client.cidade, state: client.estado, zipCode: client.cep } }, items: [{ productCode: nf.produtoId, description: nf.produtoNome, ncm: nf.ncm, cfop: nf.cfop, unit: nf.unidadeTributavel || 'UN', quantity: 1, unitValue: nf.valorProduto, csosn: nf.cstCsosn, origin: nf.origemMercadoria || '0', cest: nf.cest, gtin: nf.gtin, pisCst: nf.pisCst || '08', cofinsCst: nf.cofinsCst || '08' }], freight: nf.frete || 0, paymentCode: nf.formaPagamento === 'Pix' ? '17' : nf.formaPagamento === 'Cartao' ? '03' : nf.formaPagamento === 'Dinheiro' ? '01' : '15', paymentAmount: total, additionalInfo: nf.observacoes } });
       showToast(`NF-e de homologação autorizada. Protocolo ${result.protocol || 'confirmado'}.`);
       await loadData();
     } catch (error) { showToast(error instanceof Error ? error.message : 'Falha na transmissão da NF-e.', 'error'); }
     finally { setTransmittingNfeId(null); }
+  };
+
+  const requestTransmitNfe = (nf: NotaFiscalProduto) => {
+    if (!configFiscal || transmittingNfeId) return;
+    const client = clientes.find(item => item.id === nf.clienteId);
+    if (!client) return showToast('Cliente da NF-e não encontrado.', 'error');
+    if (!client.codigoIbge || !client.cep || !client.rua || !client.numero || !client.bairro || !client.cidade || !client.estado) return showToast('Complete o endereço fiscal e o código IBGE do cliente antes de transmitir.', 'error');
+    setPendingNfeTransmission(nf);
   };
 
   const handleDownloadNfeXml = (nf: NotaFiscalProduto) => {
@@ -1623,7 +1633,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                             </span>
                           </td>
                           <td className="p-3 text-right space-x-2">
-                            {nf.status === 'Rascunho' && <button onClick={() => void handleTransmitNfe(nf)} disabled={transmittingNfeId === nf.id} className="px-2 py-1 rounded bg-blue-600 text-white text-[10px] font-bold disabled:opacity-50" title="Transmitir para homologação">{transmittingNfeId === nf.id ? 'Enviando...' : 'Transmitir'}</button>}
+                            {nf.status === 'Rascunho' && <button onClick={() => requestTransmitNfe(nf)} disabled={transmittingNfeId === nf.id} className="px-2 py-1 rounded bg-blue-600 text-white text-[10px] font-bold disabled:opacity-50" title="Transmitir para homologação">{transmittingNfeId === nf.id ? 'Enviando...' : 'Transmitir'}</button>}
                             <button onClick={() => handleDownloadNfeXml(nf)} className="px-2 py-1 rounded border border-blue-200 text-blue-700 text-[10px] font-bold" title="Exportar XML autorizado">XML</button>
                             <button onClick={() => showToast(nf.status === 'Autorizada' ? 'Geração do DANFE será disponibilizada após validar o XML autorizado.' : 'PDF disponível somente após autorização da SEFAZ.', 'info')} className="px-2 py-1 rounded border border-slate-200 text-slate-700 text-[10px] font-bold" title="Exportar DANFE em PDF">PDF</button>
                             <button 
@@ -3124,6 +3134,25 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                   Entendido
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingNfeTransmission && configFiscal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl border border-slate-200">
+            <h3 className="text-lg font-black text-slate-900">Confirmar transmissão em homologação</h3>
+            <p className="mt-2 text-sm text-slate-600">
+              A NF-e <strong>{configFiscal.nfeProximoNumero || 32}</strong>, série <strong>{configFiscal.nfeSerie || 1}</strong>, será enviada à SEFAZ em ambiente de homologação, sem valor fiscal.
+            </p>
+            <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-700 space-y-1">
+              <p><strong>Cliente:</strong> {pendingNfeTransmission.clienteNome}</p>
+              <p><strong>Valor:</strong> {formatToBRL(pendingNfeTransmission.valorProduto + (pendingNfeTransmission.frete || 0))}</p>
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <button type="button" onClick={() => setPendingNfeTransmission(null)} className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">Cancelar</button>
+              <button type="button" onClick={() => void handleTransmitNfe(pendingNfeTransmission)} className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-700">Confirmar e transmitir</button>
             </div>
           </div>
         </div>
