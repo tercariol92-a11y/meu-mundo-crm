@@ -28,6 +28,9 @@ const builtInputRecipient = {
   address: { street: 'RUA TESTE', number: '2', district: 'CENTRO', cityCode: '4106902', city: 'CURITIBA', state: 'PR', zipCode: '80000000' },
 };
 const builtInputItems = [{ productCode: 'REP-001', description: 'RELOGIO DE PONTO', ncm: '85437099', cfop: '5102', unit: 'UN', quantity: 1, unitValue: 10, csosn: '102' as const, origin: '0', pisCst: '07', cofinsCst: '07' }];
+const builtInputResponsibleTechnical = {
+  cnpj: '56096046000100', contact: 'Jefferson', email: 'jefferson@mundotechsolucoes.com.br', phone: '41991184361',
+};
 
 const built = buildCommonSaleNfeXml({
   environment: 'homologacao', series: 1, number: 1, numericCode: '12345678',
@@ -35,6 +38,7 @@ const built = buildCommonSaleNfeXml({
   issuer: builtInputIssuer,
   recipient: builtInputRecipient,
   items: builtInputItems,
+  responsibleTechnical: builtInputResponsibleTechnical,
 });
 assert.equal(built.accessKey.length, 44);
 assert.match(built.xml, /<tpAmb>2<\/tpAmb>/);
@@ -48,6 +52,7 @@ const builtWithFreight = buildCommonSaleNfeXml({
   issuedAt: '2026-09-17T18:00:00-03:00', freight: 580, paymentCode: '15', paymentAmount: 5878,
   issuer: builtInputIssuer, recipient: builtInputRecipient,
   items: [{ ...builtInputItems[0], unitValue: 5298 }],
+  responsibleTechnical: builtInputResponsibleTechnical,
 });
 assert.ok(builtWithFreight.xml.includes('<vFrete>580.00</vFrete>'));
 assert.ok(builtWithFreight.xml.includes('<modFrete>0</modFrete>'));
@@ -82,6 +87,7 @@ async function main() {
       issuer: builtInputIssuer,
       recipient: builtInputRecipient,
       items: builtInputItems,
+      responsibleTechnical: builtInputResponsibleTechnical,
     },
     privateKeyPem,
     certificatePem,
