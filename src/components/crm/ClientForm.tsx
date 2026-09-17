@@ -537,6 +537,10 @@ export default function ClientForm({ cliente, onSave, onClose, userId, onOpenWha
                         <input type="text" className={inputClass} value={formData.estado || ''} onChange={e => handleChange('estado', e.target.value)} />
                       </div>
                       <div>
+                        <label className={labelClass}>Código IBGE do Município</label>
+                        <input type="text" inputMode="numeric" maxLength={7} className={inputClass} value={formData.codigoIbge || ''} onChange={e => handleChange('codigoIbge', e.target.value.replace(/\D/g, ''))} placeholder="0000000" />
+                      </div>
+                      <div>
                         <label className={labelClass}>País</label>
                         <input type="text" className={inputClass} value={formData.pais || ''} onChange={e => handleChange('pais', e.target.value)} />
                       </div>
