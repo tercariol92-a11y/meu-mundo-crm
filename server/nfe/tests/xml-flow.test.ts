@@ -43,6 +43,16 @@ assert.match(built.xml, /<CFOP>5102<\/CFOP>/);
 assert.match(built.xml, /<CSOSN>102<\/CSOSN>/);
 assert.match(built.xml, /NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL/);
 
+const builtWithFreight = buildCommonSaleNfeXml({
+  environment: 'homologacao', series: 1, number: 32, numericCode: '12345679',
+  issuedAt: '2026-09-17T18:00:00-03:00', freight: 580, paymentCode: '15', paymentAmount: 5878,
+  issuer: builtInputIssuer, recipient: builtInputRecipient,
+  items: [{ ...builtInputItems[0], unitValue: 5298 }],
+});
+assert.ok(builtWithFreight.xml.includes('<vFrete>580.00</vFrete>'));
+assert.ok(builtWithFreight.xml.includes('<modFrete>0</modFrete>'));
+assert.equal(builtWithFreight.totalInvoice, 5878);
+
 const signed = signNfeXml(built.xml, privateKeyPem, certificatePem, built.infNFeId);
 assert.match(signed, /Signature/);
 const batch = wrapNfeAuthorizationBatch(signed, '1');
