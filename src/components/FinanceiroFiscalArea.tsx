@@ -1242,7 +1242,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
               <FileText className="text-blue-600" size={20} />
               Central de Faturamento & Gestão Fiscal
             </h2>
-            <p className="text-xs text-slate-500 mt-0.5">MÓDULO ATUAL: NOTA FISCAL DE SERVIÇO · NF-e DE PRODUTOS AINDA NÃO IMPLEMENTADA</p>
+            <p className="text-xs text-slate-500 mt-0.5">NFS-e: PRODUÇÃO REAL · NF-e DE PRODUTOS: PREPARAÇÃO SEGURA EM HOMOLOGAÇÃO</p>
             <div className={`mt-2 inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-black tracking-wider ${activeFiscalEnvironment === 'producao' ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : activeFiscalEnvironment === 'producao_restrita' ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
               AMBIENTE ATUAL: {activeFiscalEnvironment === 'producao' ? 'PRODUÇÃO REAL' : activeFiscalEnvironment === 'producao_restrita' ? 'PRODUÇÃO RESTRITA' : 'NÃO IDENTIFICADO'}
             </div>
@@ -1250,6 +1250,29 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
           <div className="flex items-center gap-2 self-start md:self-center">
             {canEmit && (
               <>
+                <button
+                  onClick={() => {
+                    setNfeForm({
+                      ...nfeForm,
+                      clienteId: '',
+                      produtoId: '',
+                      ncm: '',
+                      cest: '',
+                      gtin: '',
+                      pisCst: '',
+                      cofinsCst: '',
+                      valorProduto: 0,
+                      frete: 0,
+                      emitirBoleto: false,
+                    });
+                    setActiveSubTab('nfe');
+                    setIsNfeModalOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                  title="Prepara e valida um rascunho de NF-e em homologação, sem transmissão fiscal"
+                >
+                  <Plus size={14} /> NOVA NF-E — PRODUTO
+                </button>
                 <button 
                   onClick={() => {
                     setNfseForm({ ...nfseForm, clienteId: '', valorServico: 0, emitirBoleto: false });
@@ -1468,6 +1491,10 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
           {/* ================= 2. tab NFE (PRODUTOS) ================= */}
           {activeSubTab === 'nfe' && (
             <div className="bg-white rounded-2xl border border-slate-200 shadow-xs">
+              <div className="mx-4 mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+                <strong className="block font-extrabold uppercase tracking-wide">NF-e de produto em homologação</strong>
+                <span>O botão “Nova NF-e — Produto” cria um rascunho validado, sem valor fiscal e sem transmissão para a SEFAZ. A emissão em produção permanece bloqueada até a homologação completa.</span>
+              </div>
               <div className="p-4 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-50/40">
                 <div className="relative flex-1 max-w-sm">
                   <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
