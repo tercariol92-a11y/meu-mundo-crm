@@ -22,6 +22,8 @@ async function callFiscal(path: string, body: Record<string, unknown>) {
       STORED_CERTIFICATE_NOT_FOUND: 'O A1 ainda não está salvo no armazenamento fiscal persistente. Selecione o arquivo uma vez.',
       CERTIFICATE_VAULT_NOT_CONFIGURED: 'O cofre seguro do certificado ainda não está configurado no serviço fiscal.',
       CERTIFICATE_VAULT_DECRYPT_FAILED: 'A senha protegida do A1 não pôde ser recuperada. Substitua o certificado para salvá-la novamente.',
+      CSRT_NOT_CONFIGURED: 'Cadastre o ID CSRT e o CSRT fornecidos pela Receita/PR antes de transmitir.',
+      CSRT_VAULT_DECRYPT_FAILED: 'O CSRT protegido não pôde ser recuperado. Cadastre-o novamente.',
       FISCAL_SERVICE_NOT_CONFIGURED: 'O serviço fiscal não está configurado.',
       FISCAL_PROXY_ERROR: 'O serviço fiscal está temporariamente indisponível.',
     };
@@ -93,6 +95,8 @@ async function fetchFiscalBlob(data: { mimeType: string; fileName: string; downl
 
 export const fiscalApi = {
   getEnvironment: () => callFiscalGet('/api/fiscal/environment'),
+  getCsrtStatus: () => callFiscalGet('/api/fiscal/nfe-csrt-status'),
+  saveCsrt: (id: string, secret: string) => callFiscal('/api/fiscal/nfe-csrt', { id, secret }),
   validateCertificate: (body: Record<string, unknown>) => callFiscal('/api/fiscal/certificate-validate', body),
   validateStoredCertificate: (body: Record<string, unknown>) => callFiscal('/api/fiscal/certificate-stored-validate', { ...body, useStoredCertificate: true }),
   testMtls: (body: Record<string, unknown>) => callFiscal('/api/fiscal/mtls-test', body),

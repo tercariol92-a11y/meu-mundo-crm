@@ -1,4 +1,5 @@
 import { buildNfeAccessKey } from './accessKey';
+import { createHash } from 'node:crypto';
 
 const NS = 'http://www.portalfiscal.inf.br/nfe';
 const escapeXml = (value: unknown) => String(value ?? '')
@@ -33,7 +34,7 @@ export interface NfeCommonSaleXmlInput {
   environment: 'homologacao' | 'producao'; issuer: NfeIssuer; recipient: NfeRecipient;
   series: number; number: number; numericCode: string; issuedAt: string;
   items: NfeProductItem[]; freight: number; paymentCode: string; paymentAmount: number;
-  responsibleTechnical: { cnpj: string; contact: string; email: string; phone: string };
+  responsibleTechnical: { cnpj: string; contact: string; email: string; phone: string; csrt: { id: string; secret: string } };
   additionalInfo?: string;
 }
 
@@ -42,6 +43,8 @@ export function buildCommonSaleNfeXml(input: NfeCommonSaleXmlInput) {
   if (!/^\d{14}$/.test(digits(input.issuer.cnpj))) throw new Error('CNPJ do emitente inválido.');
   if (!/^\d{14}$/.test(digits(input.recipient.cnpj))) throw new Error('CNPJ do destinatário inválido.');
   if (!/^\d{14}$/.test(digits(input.responsibleTechnical.cnpj))) throw new Error('CNPJ do responsável técnico inválido.');
+  if (!/^\d{2}$/.test(input.responsibleTechnical.csrt.id)) throw new Error('Identificador do CSRT inválido.');
+  if (Buffer.byteLength(input.responsibleTechnical.csrt.secret, 'utf8') < 16 || Buffer.byteLength(input.responsibleTechnical.csrt.secret, 'utf8') > 36) throw new Error('CSRT deve possuir entre 16 e 36 bytes.');
   input.items.forEach((item, index) => {
     const label = `Item ${index + 1}`;
     if (!/^\d{8}$/.test(digits(item.ncm))) throw new Error(`${label}: NCM inválido.`);
@@ -68,7 +71,8 @@ export function buildCommonSaleNfeXml(input: NfeCommonSaleXmlInput) {
   const destination = input.recipient.address.state.toUpperCase() === input.issuer.address.state.toUpperCase() ? '1' : '2';
   const homologationName = 'NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL';
   const recipientName = tpAmb === '2' ? homologationName : input.recipient.legalName;
-  const responsibleTechnicalXml = `<infRespTec><CNPJ>${digits(input.responsibleTechnical.cnpj)}</CNPJ><xContato>${escapeXml(input.responsibleTechnical.contact)}</xContato><email>${escapeXml(input.responsibleTechnical.email)}</email><fone>${digits(input.responsibleTechnical.phone)}</fone></infRespTec>`;
+  const hashCsrt = calculateCsrtHash(input.responsibleTechnical.csrt.secret, accessKey);
+  const responsibleTechnicalXml = `<infRespTec><CNPJ>${digits(input.responsibleTechnical.cnpj)}</CNPJ><xContato>${escapeXml(input.responsibleTechnical.contact)}</xContato><email>${escapeXml(input.responsibleTechnical.email)}</email><fone>${digits(input.responsibleTechnical.phone)}</fone><idCSRT>${input.responsibleTechnical.csrt.id}</idCSRT><hashCSRT>${hashCsrt}</hashCSRT></infRespTec>`;
 
   const addressXml = (address: NfePartyAddress) => `<xLgr>${escapeXml(address.street)}</xLgr><nro>${escapeXml(address.number)}</nro><xBairro>${escapeXml(address.district)}</xBairro><cMun>${digits(address.cityCode)}</cMun><xMun>${escapeXml(address.city)}</xMun><UF>${escapeXml(address.state.toUpperCase())}</UF><CEP>${digits(address.zipCode)}</CEP><cPais>${digits(address.countryCode || '1058')}</cPais><xPais>${escapeXml(address.country || 'BRASIL')}</xPais>`;
   const itemsXml = input.items.map((item, index) => {
@@ -83,6 +87,11 @@ export function buildCommonSaleNfeXml(input: NfeCommonSaleXmlInput) {
 
   const infNFe = `<infNFe Id="NFe${accessKey}" versao="4.00"><ide><cUF>41</cUF><cNF>${input.numericCode.padStart(8, '0')}</cNF><natOp>VENDA DE MERCADORIA</natOp><mod>55</mod><serie>${input.series}</serie><nNF>${input.number}</nNF><dhEmi>${escapeXml(input.issuedAt)}</dhEmi><tpNF>1</tpNF><idDest>${destination}</idDest><cMunFG>${digits(input.issuer.address.cityCode)}</cMunFG><tpImp>1</tpImp><tpEmis>1</tpEmis><cDV>${accessKey.slice(-1)}</cDV><tpAmb>${tpAmb}</tpAmb><finNFe>1</finNFe><indFinal>1</indFinal><indPres>1</indPres><procEmi>0</procEmi><verProc>MEU_MUNDO_CRM_1.0</verProc></ide><emit><CNPJ>${digits(input.issuer.cnpj)}</CNPJ><xNome>${escapeXml(input.issuer.legalName)}</xNome>${input.issuer.tradeName ? `<xFant>${escapeXml(input.issuer.tradeName)}</xFant>` : ''}<enderEmit>${addressXml(input.issuer.address)}</enderEmit><IE>${digits(input.issuer.stateRegistration)}</IE>${input.issuer.municipalRegistration ? `<IM>${digits(input.issuer.municipalRegistration)}</IM>` : ''}<CRT>1</CRT></emit><dest><CNPJ>${digits(input.recipient.cnpj)}</CNPJ><xNome>${escapeXml(recipientName)}</xNome><enderDest>${addressXml(input.recipient.address)}</enderDest><indIEDest>${input.recipient.ieIndicator}</indIEDest>${input.recipient.stateRegistration ? `<IE>${digits(input.recipient.stateRegistration)}</IE>` : ''}${input.recipient.email ? `<email>${escapeXml(input.recipient.email)}</email>` : ''}</dest>${itemsXml}<total><ICMSTot><vBC>0.00</vBC><vICMS>0.00</vICMS><vICMSDeson>0.00</vICMSDeson><vFCP>0.00</vFCP><vBCST>0.00</vBCST><vST>0.00</vST><vFCPST>0.00</vFCPST><vFCPSTRet>0.00</vFCPSTRet><vProd>${money(totalProducts)}</vProd><vFrete>${money(totalFreight)}</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII><vIPI>0.00</vIPI><vIPIDevol>0.00</vIPIDevol><vPIS>0.00</vPIS><vCOFINS>0.00</vCOFINS><vOutro>0.00</vOutro><vNF>${money(totalInvoice)}</vNF><vTotTrib>0.00</vTotTrib></ICMSTot></total><transp><modFrete>${totalFreight > 0 ? '0' : '9'}</modFrete></transp><pag><detPag><indPag>0</indPag><tPag>${escapeXml(input.paymentCode)}</tPag><vPag>${money(input.paymentAmount)}</vPag></detPag></pag>${input.additionalInfo ? `<infAdic><infCpl>${escapeXml(input.additionalInfo)}</infCpl></infAdic>` : ''}${responsibleTechnicalXml}</infNFe>`;
   return { accessKey, infNFeId: `NFe${accessKey}`, xml: `<NFe xmlns="${NS}">${infNFe}</NFe>`, totalInvoice };
+}
+
+export function calculateCsrtHash(csrt: string, accessKey: string) {
+  if (!/^\d{44}$/.test(accessKey)) throw new Error('Chave de acesso inválida para o hash CSRT.');
+  return createHash('sha1').update(`${csrt}${accessKey}`, 'utf8').digest('base64');
 }
 
 export function wrapNfeAuthorizationBatch(signedNfeXml: string, batchId: string) {

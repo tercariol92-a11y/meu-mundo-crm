@@ -34,6 +34,10 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
   const [boletos, setBoletos] = useState<BoletoBancario[]>([]);
   const [contasBancarias, setContasBancarias] = useState<ContaBancaria[]>([]);
   const [configFiscal, setConfigFiscal] = useState<ConfiguracaoFiscal | null>(null);
+  const [csrtId, setCsrtId] = useState('');
+  const [csrtSecret, setCsrtSecret] = useState('');
+  const [csrtConfigured, setCsrtConfigured] = useState(false);
+  const [isSavingCsrt, setIsSavingCsrt] = useState(false);
   const [activeFiscalEnvironment, setActiveFiscalEnvironment] = useState<'producao' | 'producao_restrita' | null>(null);
   const [auditLogs, setAuditLogs] = useState<FiscalAuditLog[]>([]);
   
@@ -181,6 +185,9 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
     void fiscalApi.getEnvironment()
       .then(environment => setActiveFiscalEnvironment(environment.environment === 'producao' ? 'producao' : 'producao_restrita'))
       .catch(() => setActiveFiscalEnvironment(null));
+    void fiscalApi.getCsrtStatus()
+      .then(status => { setCsrtConfigured(Boolean(status.configured)); setCsrtId(String(status.id || '')); })
+      .catch(() => setCsrtConfigured(false));
   }, []);
 
   // Form states for NFe
@@ -1040,6 +1047,20 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
     } finally {
       setIsSavingTaxConf(false);
     }
+  };
+
+  const handleSaveCsrt = async () => {
+    if (!canSetConfig) return showToast('Apenas administradores podem cadastrar o CSRT.', 'error');
+    if (!/^\d{2}$/.test(csrtId)) return showToast('O ID CSRT deve conter exatamente dois dígitos.', 'error');
+    const secretBytes = new TextEncoder().encode(csrtSecret).length;
+    if (secretBytes < 16 || secretBytes > 36) return showToast('O CSRT deve possuir entre 16 e 36 caracteres alfanuméricos.', 'error');
+    setIsSavingCsrt(true);
+    try {
+      const status = await fiscalApi.saveCsrt(csrtId, csrtSecret);
+      setCsrtConfigured(Boolean(status.configured)); setCsrtId(String(status.id || csrtId)); setCsrtSecret('');
+      showToast('CSRT salvo no cofre privado do serviço fiscal.');
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Falha ao salvar o CSRT.', 'error'); }
+    finally { setIsSavingCsrt(false); }
   };
 
   // Filtering utilities
@@ -2150,6 +2171,16 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                     <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">Bairro</label><input value={configFiscal.nfeBairro || ''} onChange={e => setConfigFiscal({...configFiscal, nfeBairro:e.target.value})} disabled={!canSetConfig} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
                     <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">CEP</label><input value={configFiscal.nfeCep || ''} onChange={e => setConfigFiscal({...configFiscal, nfeCep:e.target.value.replace(/\D/g, '')})} disabled={!canSetConfig} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
                     <div><label className="block text-[10px] text-slate-400 font-bold uppercase mb-1">UF</label><input maxLength={2} value={configFiscal.nfeUf || 'PR'} onChange={e => setConfigFiscal({...configFiscal, nfeUf:e.target.value.toUpperCase()})} disabled={!canSetConfig} className="w-full text-xs border border-slate-200 rounded-xl px-3 py-1.5" /></div>
+                  </div>
+
+                  <div className="bg-blue-50 p-4.5 rounded-xl border border-blue-100">
+                    <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                      <div className="sm:w-28"><label className="block text-[10px] text-blue-700 font-bold uppercase mb-1">ID CSRT</label><input value={csrtId} onChange={e => setCsrtId(e.target.value.replace(/\D/g, '').slice(0, 2))} disabled={!canSetConfig || isSavingCsrt} inputMode="numeric" maxLength={2} placeholder="01" className="w-full text-xs border border-blue-200 rounded-lg px-3 py-2" /></div>
+                      <div className="flex-1"><label className="block text-[10px] text-blue-700 font-bold uppercase mb-1">CSRT fornecido pela Receita/PR</label><input type="password" value={csrtSecret} onChange={e => setCsrtSecret(e.target.value)} disabled={!canSetConfig || isSavingCsrt} autoComplete="new-password" placeholder={csrtConfigured ? 'Digite somente para substituir o CSRT salvo' : '16 a 36 caracteres'} className="w-full text-xs border border-blue-200 rounded-lg px-3 py-2" /></div>
+                      {canSetConfig && <button type="button" onClick={() => void handleSaveCsrt()} disabled={isSavingCsrt || !csrtSecret} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold uppercase rounded-lg">{isSavingCsrt ? 'Salvando...' : csrtConfigured ? 'Substituir CSRT' : 'Salvar CSRT'}</button>}
+                    </div>
+                    <p className={`mt-2 text-[10px] font-bold ${csrtConfigured ? 'text-emerald-700' : 'text-amber-700'}`}>{csrtConfigured ? `✓ CSRT protegido cadastrado (ID ${csrtId})` : '○ CSRT ainda não cadastrado. A transmissão de NF-e permanece bloqueada.'}</p>
+                    <p className="mt-1 text-[10px] text-slate-500">O código secreto é enviado diretamente ao cofre fiscal, não é salvo no navegador nem no cadastro comum da empresa.</p>
                   </div>
 
                   <div className="bg-slate-50 p-4.5 rounded-xl border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">

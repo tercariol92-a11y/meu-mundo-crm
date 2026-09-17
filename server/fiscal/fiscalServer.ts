@@ -59,6 +59,14 @@ function getStoredCertificatePath(companyId: string) {
   return { root, companyRoot, certificatePath, passwordPath };
 }
 
+function getStoredCsrtPath(companyId: string) {
+  const root = resolve(process.env.FISCAL_CERTIFICATE_STORAGE_PATH || './fiscal-private');
+  const companyRoot = resolve(root, companyId);
+  const csrtPath = resolve(companyRoot, 'nfe', 'csrt.enc');
+  if (!companyRoot.startsWith(`${root}${sep}`) || !csrtPath.startsWith(`${companyRoot}${sep}`)) throw new Error('Caminho privado do CSRT inválido.');
+  return { companyRoot, csrtPath };
+}
+
 function getCertificateEncryptionKey() {
   const configured = String(process.env.FISCAL_CERTIFICATE_ENCRYPTION_KEY || '').trim();
   let key: Buffer;
@@ -86,6 +94,18 @@ function decryptCertificatePassword(payload: Buffer) {
   } catch (error: any) {
     if (error?.code === 'CERTIFICATE_VAULT_NOT_CONFIGURED') throw error;
     throw Object.assign(new Error('A credencial protegida do certificado não pôde ser aberta.'), { status: 500, code: 'CERTIFICATE_VAULT_DECRYPT_FAILED' });
+  }
+}
+
+function readCsrtPayload(payload: Buffer) {
+  try {
+    const parsed = JSON.parse(decryptCertificatePassword(payload));
+    const id = String(parsed?.id || ''); const secret = String(parsed?.secret || '');
+    if (!/^\d{2}$/.test(id) || Buffer.byteLength(secret, 'utf8') < 16 || Buffer.byteLength(secret, 'utf8') > 36) throw new Error('CSRT inválido.');
+    return { id, secret };
+  } catch (error: any) {
+    if (error?.code === 'CERTIFICATE_VAULT_NOT_CONFIGURED') throw error;
+    throw Object.assign(new Error('O CSRT protegido não pôde ser recuperado. Cadastre-o novamente.'), { status: 500, code: 'CSRT_VAULT_DECRYPT_FAILED' });
   }
 }
 
@@ -166,6 +186,30 @@ app.get('/api/fiscal/environment', protect, (req: any, res) => {
   res.json({ success: true, data: { ...environment, companyId: req.fiscal.companyId, productionBlocked: environment.environment !== 'producao', transmissionEnabled: environment.environment === 'producao' && environment.productionEnabled } });
 });
 
+app.get('/api/fiscal/nfe/csrt/status', protect, async (req: any, res, next) => { try {
+  const { csrtPath } = getStoredCsrtPath(req.fiscal.companyId);
+  try {
+    const stored = readCsrtPayload(await readFile(csrtPath));
+    return res.json({ success: true, data: { configured: true, id: stored.id } });
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return res.json({ success: true, data: { configured: false, id: null } });
+    throw error;
+  }
+} catch (error) { next(error); } });
+
+app.post('/api/fiscal/nfe/csrt', protect, async (req: any, res, next) => { try {
+  const id = String(req.body?.id || '').trim(); const secret = String(req.body?.secret || '').trim();
+  if (!/^\d{2}$/.test(id)) throw Object.assign(new Error('O identificador do CSRT deve conter exatamente dois dígitos.'), { status: 400, code: 'INVALID_CSRT_ID' });
+  const secretBytes = Buffer.byteLength(secret, 'utf8');
+  if (secretBytes < 16 || secretBytes > 36) throw Object.assign(new Error('O CSRT deve possuir entre 16 e 36 bytes.'), { status: 400, code: 'INVALID_CSRT_SECRET' });
+  const { companyRoot, csrtPath } = getStoredCsrtPath(req.fiscal.companyId); const csrtDir = resolve(companyRoot, 'nfe');
+  await mkdir(csrtDir, { recursive: true, mode: 0o700 });
+  await writeFile(csrtPath, encryptCertificatePassword(JSON.stringify({ id, secret })), { mode: 0o600 }); await chmod(csrtPath, 0o600);
+  await req.fiscal.db.collection('companies').doc(req.fiscal.companyId).collection('fiscal').doc('nfe-csrt').set({ configured: true, id, storageReference: 'private://nfe/csrt', updatedBy: req.fiscal.decoded.uid, updatedAt: FieldValue.serverTimestamp() });
+  await writeFiscalAudit(req.fiscal.db, req.fiscal.companyId, req.fiscal.decoded.uid, 'nfe_csrt_updated', { id });
+  res.json({ success: true, data: { configured: true, id } });
+} catch (error) { next(error); } });
+
 app.post('/api/fiscal/certificate/stored/validate', protect, async (req: any, res, next) => { try {
   const input = readCertificate(req.body);
   const parsed = parsePkcs12(input.buffer, input.password, String(req.body?.expectedCnpj || ''));
@@ -179,9 +223,13 @@ app.post('/api/fiscal/certificate/stored/validate', protect, async (req: any, re
 
 app.post('/api/fiscal/nfe/issue', protect, async (req: any, res, next) => { try {
   if (req.body?.confirmTransmission !== true) throw Object.assign(new Error('Confirmação explícita da transmissão obrigatória.'), { status: 400, code: 'NFE_CONFIRMATION_REQUIRED' });
+  let csrt;
+  try { csrt = readCsrtPayload(await readFile(getStoredCsrtPath(req.fiscal.companyId).csrtPath)); }
+  catch (error: any) { if (error?.code === 'ENOENT') throw Object.assign(new Error('Cadastre o ID CSRT e o CSRT fornecidos pela Receita/PR antes de transmitir.'), { status: 409, code: 'CSRT_NOT_CONFIGURED' }); throw error; }
   const input = readCertificate(req.body);
   const parsedCertificate = parsePkcs12(input.buffer, input.password, String(req.body?.expectedCnpj || ''));
-  const prepared = await prepareNfeAuthorization({ input: req.body.nfe, privateKeyPem: parsedCertificate.privateKeyPem, certificatePem: parsedCertificate.certificatePem, batchId: String(req.body.batchId || Date.now()).slice(-15) });
+  const nfeInput = { ...req.body.nfe, responsibleTechnical: { ...req.body.nfe?.responsibleTechnical, csrt } };
+  const prepared = await prepareNfeAuthorization({ input: nfeInput, privateKeyPem: parsedCertificate.privateKeyPem, certificatePem: parsedCertificate.certificatePem, batchId: String(req.body.batchId || Date.now()).slice(-15) });
   const response = await authorizeNfeBatch({ environment: prepared.environment, endpoint: prepared.endpoint, batchXml: prepared.batchXml, credentials: { pfx: parsedCertificate.pfx, passphrase: parsedCertificate.passphrase } });
   const result = parseAuthorizationResponse(response.body);
   console.info('[NFE AUTHORIZATION RESULT]', { number: req.body.nfe.number, series: req.body.nfe.series, environment: prepared.environment, httpStatus: response.statusCode, authorized: result.authorized, cStat: result.cStat, xMotivo: result.xMotivo, protocol: result.protocol || null, accessKey: result.accessKey || prepared.accessKey });

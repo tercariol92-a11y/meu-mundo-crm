@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import forge from 'node-forge';
-import { buildCommonSaleNfeXml, wrapNfeAuthorizationBatch } from '../xml/nfeBuilder';
+import { buildCommonSaleNfeXml, calculateCsrtHash, wrapNfeAuthorizationBatch } from '../xml/nfeBuilder';
 import { signNfeXml } from '../signatures/xmlDsig';
 import { buildAuthorizationSoapEnvelope, authorizeNfeBatch } from '../soap/authorizationClient';
 import { parseAuthorizationResponse } from '../soap/responseParser';
@@ -30,7 +30,10 @@ const builtInputRecipient = {
 const builtInputItems = [{ productCode: 'REP-001', description: 'RELOGIO DE PONTO', ncm: '85437099', cfop: '5102', unit: 'UN', quantity: 1, unitValue: 10, csosn: '102' as const, origin: '0', pisCst: '07', cofinsCst: '07' }];
 const builtInputResponsibleTechnical = {
   cnpj: '56096046000100', contact: 'Jefferson', email: 'jefferson@mundotechsolucoes.com.br', phone: '41991184361',
+  csrt: { id: '01', secret: 'G8063VRTNDMO886SFNK5LDUDEI24XJ22YIPO' },
 };
+
+assert.equal(calculateCsrtHash('G8063VRTNDMO886SFNK5LDUDEI24XJ22YIPO', '41180678393592000146558900000006041028190697'), 'aWv6LeEM4X6u4+qBI2OYZ8grigw=');
 
 const built = buildCommonSaleNfeXml({
   environment: 'homologacao', series: 1, number: 1, numericCode: '12345678',
@@ -46,6 +49,7 @@ assert.match(built.xml, /<NCM>85437099<\/NCM>/);
 assert.match(built.xml, /<CFOP>5102<\/CFOP>/);
 assert.match(built.xml, /<CSOSN>102<\/CSOSN>/);
 assert.match(built.xml, /NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL/);
+assert.match(built.xml, /<idCSRT>01<\/idCSRT><hashCSRT>[A-Za-z0-9+/]{27}=<\/hashCSRT>/);
 
 const builtWithFreight = buildCommonSaleNfeXml({
   environment: 'homologacao', series: 1, number: 32, numericCode: '12345679',
