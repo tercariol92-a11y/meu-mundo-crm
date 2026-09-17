@@ -7,7 +7,8 @@ import { assertNfeEndpointAllowed, type NfeEnvironment } from '../config/environ
 
 const SOAP_NS = 'http://www.w3.org/2003/05/soap-envelope';
 const SERVICE_NS = 'http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4';
-const ICP_BRASIL_CA_BUNDLE = readFileSync(resolve(process.cwd(), 'server/fiscal/certificates/icp-brasil/2026-07-13/icp-brasil-bundle.pem'), 'utf8');
+const ICP_BRASIL_CA_CERTIFICATES = readFileSync(resolve(process.cwd(), 'server/fiscal/certificates/icp-brasil/2026-07-13/icp-brasil-bundle.pem'), 'utf8')
+  .match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
 
 export function buildAuthorizationSoapEnvelope(enviNFeXml: string) {
   return `<?xml version="1.0" encoding="utf-8"?><soap12:Envelope xmlns:soap12="${SOAP_NS}"><soap12:Body><nfeDadosMsg xmlns="${SERVICE_NS}">${enviNFeXml}</nfeDadosMsg></soap12:Body></soap12:Envelope>`;
@@ -29,7 +30,7 @@ export async function authorizeNfeBatch(args: {
   return new Promise<{ statusCode: number; contentType: string; body: string }>((resolve, reject) => {
     const request = https.request(url, {
       method: 'POST', pfx: args.credentials.pfx, passphrase: args.credentials.passphrase,
-      ca: [...tls.rootCertificates, ICP_BRASIL_CA_BUNDLE],
+      ca: [...tls.rootCertificates, ...ICP_BRASIL_CA_CERTIFICATES],
       rejectUnauthorized: true, minVersion: 'TLSv1.2', timeout: args.timeoutMs || 30000,
       headers: { 'Content-Type': 'application/soap+xml; charset=utf-8', 'Content-Length': Buffer.byteLength(body) },
     }, response => {
