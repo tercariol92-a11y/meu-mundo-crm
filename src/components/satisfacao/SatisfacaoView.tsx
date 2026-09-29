@@ -13,7 +13,9 @@ import {
   ArrowDownRight,
   Clock,
   ChevronDown,
-  Trash2
+  Trash2,
+  Trophy,
+  Info
 } from 'lucide-react';
 import { format, subDays, isWithinInterval, parseISO, startOfDay, endOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -39,6 +41,26 @@ interface Survey {
   ratings?: Record<string, number>;
 }
 
+interface RankingEntry {
+  id: string;
+  nome: string;
+  totalAvaliacoes: number;
+  media: number;
+  avaliacoesPositivas: number;
+  avaliacoesNeutras: number;
+  avaliacoesNegativas: number;
+  percentualPositivas: number;
+  score: number;
+  elegivelRanking: boolean;
+  status: 'META_ATINGIDA' | 'EM_QUALIFICACAO';
+}
+
+interface RankingResponse {
+  stats: { total: number; media: number; positivas: number; neutras: number; negativas: number; taxaSatisfacao: number; funcionariosQualificados: number; totalFuncionarios: number };
+  ranking: { atendentes: RankingEntry[]; tecnicos: RankingEntry[] };
+  config: { minAvaliacoes: number; metaVolume: number };
+}
+
 const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
   const [surveys, setSurveys] = useState<Survey[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,6 +69,8 @@ const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [surveyToDelete, setSurveyToDelete] = useState<Survey | null>(null);
   const [deletingSurveyId, setDeletingSurveyId] = useState('');
+  const [rankingData, setRankingData] = useState<RankingResponse | null>(null);
+  const [rankingError, setRankingError] = useState('');
   const isAdmin = user.role === 'admin' || user.roles?.includes('admin');
 
   const deleteSurvey = async () => {
@@ -88,6 +112,24 @@ const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    const timer = window.setTimeout(async () => {
+      try {
+        const idToken = await auth.currentUser?.getIdToken();
+        if (!idToken) return;
+        const params = new URLSearchParams({ days: filterPeriod, note: filterNote, search: searchTerm });
+        const response = await fetch(`/api/support/satisfaction-ranking?${params}`, { headers: { Authorization: `Bearer ${idToken}` } });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `Falha ao carregar ranking (HTTP ${response.status}).`);
+        setRankingData(body as RankingResponse);
+        setRankingError('');
+      } catch (error) {
+        setRankingError(error instanceof Error ? error.message : 'Não foi possível carregar o ranking.');
+      }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [filterPeriod, filterNote, searchTerm, surveys.length]);
+
   const filteredSurveys = useMemo(() => {
     const now = new Date();
     const startDate = subDays(now, parseInt(filterPeriod));
@@ -117,7 +159,7 @@ const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
     });
   }, [surveys, filterPeriod, filterNote, searchTerm]);
 
-  const stats = useMemo(() => {
+  const localStats = useMemo(() => {
     if (filteredSurveys.length === 0) return {
       avg: 0,
       total: 0,
@@ -162,6 +204,17 @@ const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
 
     return { avg, total, bestAttendant, bestTecnico, satisfied, neutral, unsatisfied };
   }, [filteredSurveys]);
+
+  const stats = rankingData?.stats ? {
+    avg: rankingData.stats.media,
+    total: rankingData.stats.total,
+    satisfied: rankingData.stats.positivas,
+    neutral: rankingData.stats.neutras,
+    unsatisfied: rankingData.stats.negativas,
+  } : localStats;
+  const champion = rankingData?.ranking.atendentes.find(item => item.elegivelRanking);
+  const bestTechnical = rankingData?.ranking.tecnicos.find(item => item.elegivelRanking);
+  const highestAverage = [...(rankingData?.ranking.atendentes || [])].sort((a, b) => b.media - a.media || b.totalAvaliacoes - a.totalAvaliacoes)[0];
 
   const renderStars = (note: number) => {
     return (
@@ -231,7 +284,7 @@ const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -282,8 +335,12 @@ const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
             </div>
           </div>
           <div className="space-y-1">
-            <p className="text-sm font-medium text-gray-500">Melhor Atendente</p>
-            <h3 className="text-xl font-bold text-gray-900 truncate">{stats.bestAttendant}</h3>
+            <div className="flex items-center gap-1.5">
+              <p className="text-sm font-medium text-gray-500">Campeão do período</p>
+              <span title="O ranking considera média, volume de avaliações e taxa de satisfação. São necessárias pelo menos 10 avaliações no período."><Info size={14} className="text-gray-400" /></span>
+            </div>
+            <h3 className="text-xl font-bold text-gray-900 truncate">{champion?.nome || 'Ainda sem atendente qualificado'}</h3>
+            {champion ? <p className="text-xs text-gray-500">⭐ {champion.media.toFixed(1)} · {champion.totalAvaliacoes} avaliações · {champion.percentualPositivas}% satisfação · Score {champion.score.toFixed(0)}/100</p> : <p className="text-xs text-gray-400">Faltam avaliações para formar o ranking.</p>}
           </div>
         </motion.div>
 
@@ -300,9 +357,55 @@ const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
           </div>
           <div className="space-y-1">
             <p className="text-sm font-medium text-gray-500">Melhor Técnico</p>
-            <h3 className="text-xl font-bold text-gray-900 truncate">{stats.bestTecnico}</h3>
+            <h3 className="text-xl font-bold text-gray-900 truncate">{bestTechnical?.nome || 'Ainda sem técnico qualificado'}</h3>
+            {bestTechnical && <p className="text-xs text-gray-500">⭐ {bestTechnical.media.toFixed(1)} · Score {bestTechnical.score.toFixed(0)}/100</p>}
           </div>
         </motion.div>
+
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <p className="text-sm font-medium text-gray-500">Melhor nota</p>
+          <h3 className="text-xl font-bold text-gray-900 truncate">{highestAverage?.nome || '-'}</h3>
+          {highestAverage && <p className="text-xs text-gray-500">⭐ {highestAverage.media.toFixed(1)} · {highestAverage.totalAvaliacoes} avaliações · {highestAverage.elegivelRanking ? 'Qualificado' : `Em qualificação — ${highestAverage.totalAvaliacoes}/${rankingData?.config.minAvaliacoes || 10}`}</p>}
+        </div>
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <p className="text-sm font-medium text-gray-500">Taxa de Satisfação</p>
+          <h3 className="text-2xl font-bold text-gray-900">{rankingData?.stats.taxaSatisfacao.toFixed(1) || '0.0'}%</h3>
+          <p className="text-xs text-gray-500">Notas 4 e 5</p>
+        </div>
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <p className="text-sm font-medium text-gray-500">Funcionários Qualificados</p>
+          <h3 className="text-2xl font-bold text-gray-900">{rankingData?.stats.funcionariosQualificados || 0} de {rankingData?.stats.totalFuncionarios || 0}</h3>
+          <p className="text-xs text-gray-500">Meta mínima: {rankingData?.config.minAvaliacoes || 10} avaliações</p>
+        </div>
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <p className="text-sm font-medium text-gray-500">Avaliações Positivas / Negativas</p>
+          <h3 className="text-2xl font-bold"><span className="text-green-600">{stats.satisfied}</span> <span className="text-gray-300">/</span> <span className="text-red-600">{stats.unsatisfied}</span></h3>
+        </div>
+      </div>
+
+      {rankingError && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{rankingError}</div>}
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        {(['atendentes', 'tecnicos'] as const).map(kind => (
+          <div key={kind} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-gray-100 flex items-center gap-2"><Trophy size={18} className="text-yellow-500" /><h2 className="font-semibold text-gray-900">Ranking de {kind === 'atendentes' ? 'Atendentes' : 'Técnicos'}</h2></div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-[10px] uppercase text-gray-500"><tr><th className="p-3 text-left">Posição</th><th className="p-3 text-left">Profissional</th><th className="p-3">Avaliações</th><th className="p-3">Média</th><th className="p-3">Satisfação</th><th className="p-3" title="Score calculado por média, volume, satisfação e penalização por avaliações negativas.">Score ⓘ</th></tr></thead>
+                <tbody className="divide-y divide-gray-100">
+                  {(rankingData?.ranking[kind] || []).map((entry, index) => (
+                    <tr key={`${kind}-${entry.id}`}>
+                      <td className="p-3 font-bold">{entry.elegivelRanking ? (index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : index + 1) : '—'}</td>
+                      <td className="p-3"><div className="font-semibold text-gray-900">{entry.nome}</div><div className={entry.elegivelRanking ? 'text-xs text-green-600' : 'text-xs text-amber-600'}>{entry.elegivelRanking ? '✓ Meta mínima atingida' : `Em qualificação — ${entry.totalAvaliacoes}/${rankingData?.config.minAvaliacoes || 10}`}</div></td>
+                      <td className="p-3 text-center">{entry.totalAvaliacoes}</td><td className="p-3 text-center">⭐ {entry.media.toFixed(1)}</td><td className="p-3 text-center">{entry.percentualPositivas.toFixed(0)}%</td><td className="p-3 text-center font-bold">{entry.score.toFixed(0)}</td>
+                    </tr>
+                  ))}
+                  {!rankingData?.ranking[kind].length && <tr><td colSpan={6} className="p-6 text-center text-gray-400">Nenhuma avaliação no período.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

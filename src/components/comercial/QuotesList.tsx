@@ -42,6 +42,28 @@ interface QuotesListProps {
   onViewChange?: (view: any) => void;
 }
 
+const toDateInputValue = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const currentMonthRange = () => {
+  const now = new Date();
+  return {
+    start: toDateInputValue(new Date(now.getFullYear(), now.getMonth(), 1)),
+    end: toDateInputValue(new Date(now.getFullYear(), now.getMonth() + 1, 0))
+  };
+};
+
+const proposalApprovalDate = (quote: Proposta) => {
+  const raw: any = quote.dataAprovacao;
+  if (!raw) return null;
+  const date = typeof raw?.toDate === 'function' ? raw.toDate() : new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
 export default function QuotesList({ user, onViewChange }: QuotesListProps) {
   const { propostas: quotes, usuarios: usersData, clientes: clientsData, leads: leadsData, loading } = useGlobalData();
   const userId = user.id;
@@ -58,6 +80,12 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
   const [negotiationIndex, setNegotiationIndex] = useState<number | null>(null);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   const [atendimentoContext, setAtendimentoContext] = useState<any>(null);
+  const [closingQuote, setClosingQuote] = useState<Proposta | null>(null);
+  const [closingDate, setClosingDate] = useState('');
+  const [savingClosingDate, setSavingClosingDate] = useState(false);
+  const initialSalesRange = useMemo(() => currentMonthRange(), []);
+  const [salesStartDate, setSalesStartDate] = useState(initialSalesRange.start);
+  const [salesEndDate, setSalesEndDate] = useState(initialSalesRange.end);
 
   useEffect(() => {
     const requestedBudgetId = sessionStorage.getItem('atendimento_open_budget_id');
@@ -108,19 +136,35 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
     ) || [];
   }, [usersData]);
 
-  const filteredQuotes = useMemo(() => sortProposals(quotes.filter(quote => {
+  const isApprovalInSelectedPeriod = (quote: Proposta) => {
+    const approvalDate = proposalApprovalDate(quote);
+    if (!approvalDate) return false;
+    const approvalDay = toDateInputValue(approvalDate);
+    return (!salesStartDate || approvalDay >= salesStartDate) && (!salesEndDate || approvalDay <= salesEndDate);
+  };
+
+  const matchesCurrentFilters = (quote: Proposta) => {
     const entityName = getClientOrLeadName(quote).toLowerCase();
     const matchesSearch = 
       (quote.titulo?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
       entityName.includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'Todos' || quote.status === statusFilter;
     const matchesVendedor = vendedorFilter === 'Todos' || quote.vendedorId === vendedorFilter;
-    return matchesSearch && matchesStatus && matchesVendedor;
-  }), sortOption), [quotes, searchTerm, statusFilter, vendedorFilter, sortOption, clientsData, leadsData]);
+    const matchesSalesPeriod = quote.status !== 'Aprovado' || isApprovalInSelectedPeriod(quote);
+    return matchesSearch && matchesStatus && matchesVendedor && matchesSalesPeriod;
+  };
 
-  const approvedTotals = quotes.filter(q => q.status === 'Aprovado').map(proposalTotals);
+  const filteredQuotes = useMemo(
+    () => sortProposals(quotes.filter(matchesCurrentFilters), sortOption),
+    [quotes, searchTerm, statusFilter, vendedorFilter, sortOption, clientsData, leadsData, salesStartDate, salesEndDate]
+  );
+
+  const approvedQuotesInPeriod = filteredQuotes.filter(q => q.status === 'Aprovado');
+  const approvedWithoutClosingDate = quotes.filter(q => q.status === 'Aprovado' && !proposalApprovalDate(q)).length;
+  const approvedTotals = approvedQuotesInPeriod.map(proposalTotals);
+  const activeQuotes = quotes.filter(q => q.status === 'Enviado' || q.status === 'Rascunho' || q.status === 'Em negociação');
   const stats = {
-    totalValue: quotes.reduce((sum, q) => sum + proposalTotals(q).investimentoInicial, 0),
+    totalValue: activeQuotes.reduce((sum, q) => sum + proposalTotals(q).investimentoInicial, 0),
     approvalRate: quotes.length > 0 ? (quotes.filter(q => q.status === 'Aprovado').length / quotes.length) * 100 : 0,
     revenue: approvedTotals.reduce((sum, total) => sum + total.investimentoInicial, 0),
     products: approvedTotals.reduce((sum, total) => sum + total.totalProdutos, 0),
@@ -129,7 +173,7 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
     arr: approvedTotals.reduce((sum, total) => sum + total.totalAnual, 0),
     monthlyCount: approvedTotals.filter(total => total.hasMonthly).length,
     annualCount: approvedTotals.filter(total => total.hasAnnual).length,
-    activeQuotes: quotes.filter(q => q.status === 'Enviado' || q.status === 'Rascunho' || q.status === 'Em negociação').length
+    activeQuotes: activeQuotes.length
   };
 
   const getStatusColor = (status: string) => {
@@ -167,13 +211,68 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
     }
   };
 
-  const handleStatusChange = async (id: string, newStatus: Proposta['status']) => {
+  const dateInputToIso = (date: string) => {
+    const [year, month, day] = date.split('-').map(Number);
+    return new Date(year, month - 1, day, 12, 0, 0).toISOString();
+  };
+
+  const isoToDateInput = (value?: string) => {
+    if (!value) return new Date().toLocaleDateString('en-CA');
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return new Date().toLocaleDateString('en-CA');
+    return date.toLocaleDateString('en-CA');
+  };
+
+  const requestClosingDate = (quote: Proposta) => {
+    setClosingQuote(quote);
+    setClosingDate(isoToDateInput(quote.dataAprovacao));
+  };
+
+  const handleStatusChange = async (quote: Proposta, newStatus: Proposta['status']) => {
+    if (newStatus === quote.status) return;
+    if (newStatus === 'Aprovado') {
+      if (isLocalAdmin) {
+        requestClosingDate(quote);
+      } else {
+        try {
+          await databaseService.updateProposta(quote.id, { status: 'Aprovado', dataAprovacao: new Date().toISOString() });
+          setToast({ message: 'Orçamento aprovado com a data de hoje.', type: 'success' });
+        } catch (error) {
+          console.error('Error approving proposal:', error);
+          setToast({ message: 'Erro ao atualizar status.', type: 'error' });
+        }
+      }
+      return;
+    }
     try {
-      await databaseService.updateProposta(id, { status: newStatus });
+      await databaseService.updateProposta(quote.id, { status: newStatus });
       setToast({ message: `Status atualizado para ${newStatus}`, type: 'success' });
     } catch (error) {
       console.error('Error updating status:', error);
       setToast({ message: 'Erro ao atualizar status.', type: 'error' });
+    }
+  };
+
+  const confirmClosing = async () => {
+    if (!closingQuote || !closingDate) {
+      setToast({ message: 'Informe a data real do fechamento.', type: 'error' });
+      return;
+    }
+
+    setSavingClosingDate(true);
+    try {
+      await databaseService.updateProposta(closingQuote.id, {
+        status: 'Aprovado',
+        dataAprovacao: dateInputToIso(closingDate)
+      });
+      setToast({ message: 'Orçamento aprovado na data de fechamento informada.', type: 'success' });
+      setClosingQuote(null);
+      setClosingDate('');
+    } catch (error) {
+      console.error('Error approving proposal:', error);
+      setToast({ message: 'Erro ao salvar a data de fechamento.', type: 'error' });
+    } finally {
+      setSavingClosingDate(false);
     }
   };
 
@@ -242,8 +341,9 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
             </div>
             <TrendingUp size={16} className="text-green-500" />
           </div>
-          <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Valor em Propostas</p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Pipeline em aberto</p>
           <p className="text-2xl font-black text-on-surface">R$ {stats.totalValue.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}</p>
+          <p className="text-[9px] text-on-surface-variant">Rascunhos, enviadas e em negociação</p>
         </div>
 
         <div className="bg-surface-container-low p-6 rounded-3xl border border-surface-container-high shadow-sm space-y-2">
@@ -253,8 +353,9 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
             </div>
             <PieChart size={16} className="text-primary" />
           </div>
-          <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Taxa de Aprovação</p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Taxa geral de aprovação</p>
           <p className="text-2xl font-black text-on-surface">{stats.approvalRate.toFixed(1)}%</p>
+          <p className="text-[9px] text-on-surface-variant">Histórico total de orçamentos</p>
         </div>
 
         <div className="bg-surface-container-low p-6 rounded-3xl border border-surface-container-high shadow-sm space-y-2">
@@ -264,8 +365,11 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
             </div>
             <Target size={16} className="text-primary" />
           </div>
-          <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Receita Gerada</p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Receita no período</p>
           <p className="text-2xl font-black text-on-surface">R$ {stats.revenue.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}</p>
+          <p className="text-[9px] text-on-surface-variant">
+            Produtos R$ {stats.products.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} + serviços R$ {stats.services.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
+          </p>
         </div>
 
         <div className="bg-surface-container-low p-6 rounded-3xl border border-surface-container-high shadow-sm space-y-2">
@@ -277,10 +381,68 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
           </div>
           <p className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant">Propostas Ativas</p>
           <p className="text-2xl font-black text-on-surface">{stats.activeQuotes}</p>
+          <p className="text-[9px] text-on-surface-variant">Quantidade atual no pipeline</p>
         </div>
-        <div className="bg-surface-container-low p-5 rounded-3xl border border-surface-container-high"><p className="text-[9px] font-black uppercase text-on-surface-variant">Produtos vendidos</p><p className="text-xl font-black">R$ {stats.products.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}</p></div>
-        <div className="bg-surface-container-low p-5 rounded-3xl border border-surface-container-high"><p className="text-[9px] font-black uppercase text-on-surface-variant">Serviços vendidos</p><p className="text-xl font-black">R$ {stats.services.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}</p></div>
-        <div className="bg-surface-container-low p-5 rounded-3xl border border-surface-container-high"><p className="text-[9px] font-black uppercase text-on-surface-variant">MRR / ARR</p><p className="text-sm font-black text-blue-700">R$ {stats.mrr.toLocaleString('pt-BR')}/mês</p><p className="text-sm font-black text-purple-700">R$ {stats.arr.toLocaleString('pt-BR')}/ano</p><p className="text-[9px] text-on-surface-variant">{stats.monthlyCount} mensais · {stats.annualCount} anuais</p></div>
+        <div className="bg-surface-container-low p-5 rounded-3xl border border-surface-container-high"><p className="text-[9px] font-black uppercase text-on-surface-variant">Produtos no período</p><p className="text-xl font-black">R$ {stats.products.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}</p></div>
+        <div className="bg-surface-container-low p-5 rounded-3xl border border-surface-container-high"><p className="text-[9px] font-black uppercase text-on-surface-variant">Serviços no período</p><p className="text-xl font-black">R$ {stats.services.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}</p></div>
+        <div className="bg-surface-container-low p-5 rounded-3xl border border-surface-container-high"><p className="text-[9px] font-black uppercase text-on-surface-variant">Novos recorrentes no período</p><p className="text-sm font-black text-blue-700">MRR R$ {stats.mrr.toLocaleString('pt-BR')}/mês</p><p className="text-sm font-black text-purple-700">ARR R$ {stats.arr.toLocaleString('pt-BR')}/ano</p><p className="text-[9px] text-on-surface-variant">Separados da receita inicial · {stats.monthlyCount} mensais · {stats.annualCount} anuais</p></div>
+      </div>
+
+      <div className="rounded-3xl border border-primary/20 bg-primary/5 p-4">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-widest text-primary">Período das vendas</p>
+            <p className="mt-1 text-sm text-on-surface-variant">Os indicadores consideram a data real de fechamento dos orçamentos aprovados.</p>
+            {approvedWithoutClosingDate > 0 && isLocalAdmin && (
+              <p className="mt-1 text-xs font-bold text-orange-700">
+                {approvedWithoutClosingDate} aprovado(s) sem data de fechamento não entram na soma. Use “Editar data de fechamento” para corrigir.
+              </p>
+            )}
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <label className="text-[10px] font-black uppercase tracking-wider text-on-surface-variant">
+              Data inicial
+              <input
+                type="date"
+                value={salesStartDate}
+                onChange={(event) => setSalesStartDate(event.target.value)}
+                className="mt-1 block rounded-xl border border-surface-container-high bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal"
+              />
+            </label>
+            <label className="text-[10px] font-black uppercase tracking-wider text-on-surface-variant">
+              Data final
+              <input
+                type="date"
+                value={salesEndDate}
+                min={salesStartDate || undefined}
+                onChange={(event) => setSalesEndDate(event.target.value)}
+                className="mt-1 block rounded-xl border border-surface-container-high bg-white px-3 py-2 text-sm font-medium normal-case tracking-normal"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                const range = currentMonthRange();
+                setSalesStartDate(range.start);
+                setSalesEndDate(range.end);
+              }}
+              className="rounded-xl bg-primary px-4 py-2.5 text-xs font-black uppercase tracking-wider text-white"
+            >Este mês</button>
+            <button
+              type="button"
+              onClick={() => {
+                const today = toDateInputValue(new Date());
+                setSalesStartDate(today);
+                setSalesEndDate(today);
+              }}
+              className="rounded-xl border border-primary/30 bg-white px-4 py-2.5 text-xs font-black uppercase tracking-wider text-primary"
+            >Hoje</button>
+            <div className="rounded-xl bg-white px-4 py-2 text-center border border-surface-container-high">
+              <p className="text-[9px] font-black uppercase text-on-surface-variant">Vendas encontradas</p>
+              <p className="text-lg font-black text-primary">{approvedQuotesInPeriod.length}</p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Filters */}
@@ -429,7 +591,7 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
                       <div className="relative group/status w-fit">
                         <select
                           value={quote.status}
-                          onChange={(e) => handleStatusChange(quote.id, e.target.value as any)}
+                          onChange={(e) => handleStatusChange(quote, e.target.value as any)}
                           className={`appearance-none cursor-pointer flex items-center gap-1.5 w-fit px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest transition-all hover:brightness-95 pr-8 ${getStatusColor(quote.status)}`}
                           style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center' }}
                         >
@@ -444,6 +606,21 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
                           {getStatusIcon(quote.status)}
                         </div>
                       </div>
+                      {quote.status === 'Aprovado' && (
+                        <div className="mt-1 text-[10px] font-bold text-green-700">
+                          Fechado em {quote.dataAprovacao ? formatDateBR(quote.dataAprovacao) : 'data não informada'}
+                        </div>
+                      )}
+                      {quote.status === 'Aprovado' && isLocalAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => requestClosingDate(quote)}
+                          className="mt-1 text-[10px] font-bold text-green-700 hover:underline"
+                          title="Corrigir data de fechamento"
+                        >
+                          Editar data de fechamento
+                        </button>
+                      )}
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -505,6 +682,56 @@ export default function QuotesList({ user, onViewChange }: QuotesListProps) {
       </div>
 
       <AnimatePresence>
+        {closingQuote && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] bg-black/50 flex items-center justify-center p-4"
+            onClick={() => !savingClosingDate && setClosingQuote(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 20, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.98 }}
+              onClick={(event) => event.stopPropagation()}
+              className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl"
+            >
+              <div className="flex items-start gap-3">
+                <div className="rounded-2xl bg-green-100 p-3 text-green-700"><CheckCircle2 size={22} /></div>
+                <div>
+                  <h2 className="text-lg font-black text-on-surface">Confirmar fechamento</h2>
+                  <p className="mt-1 text-sm text-on-surface-variant">Informe a data em que a venda realmente foi fechada. O faturamento e os indicadores usarão esta data.</p>
+                </div>
+              </div>
+              <div className="mt-5">
+                <label className="mb-2 block text-xs font-black uppercase tracking-wider text-on-surface-variant">Data de fechamento</label>
+                <input
+                  type="date"
+                  value={closingDate}
+                  max={new Date().toLocaleDateString('en-CA')}
+                  onChange={(event) => setClosingDate(event.target.value)}
+                  className="w-full rounded-2xl border border-surface-container-high px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+                />
+                <p className="mt-2 text-xs text-on-surface-variant">Orçamento: <strong>{closingQuote.titulo}</strong></p>
+              </div>
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  disabled={savingClosingDate}
+                  onClick={() => setClosingQuote(null)}
+                  className="rounded-xl px-4 py-2.5 text-xs font-black uppercase tracking-wider text-on-surface-variant hover:bg-surface-container-highest disabled:opacity-50"
+                >Cancelar</button>
+                <button
+                  type="button"
+                  disabled={savingClosingDate || !closingDate}
+                  onClick={confirmClosing}
+                  className="rounded-xl bg-green-600 px-5 py-2.5 text-xs font-black uppercase tracking-wider text-white hover:bg-green-700 disabled:opacity-50"
+                >{savingClosingDate ? 'Salvando...' : 'Confirmar aprovação'}</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
         {toast && (
           <motion.div
             initial={{ opacity: 0, y: 50, scale: 0.9 }}

@@ -2823,7 +2823,7 @@ export const databaseService = {
       };
 
       if (proposta.status === 'Aprovado') {
-        insertData.dataAprovacao = new Date().toISOString();
+        insertData.dataAprovacao = proposta.dataAprovacao || new Date().toISOString();
       }
 
       const docRef = await addDoc(collection(db, 'propostas'), insertData);
@@ -2847,7 +2847,7 @@ export const databaseService = {
               // Atualizar Lead para Fechado
               await updateDoc(leadRef, {
                 status: 'Fechado',
-                dataFechamento: new Date().toISOString(),
+                dataFechamento: insertData.dataAprovacao,
                 updatedAt: serverTimestamp()
               });
             }
@@ -2881,13 +2881,22 @@ export const databaseService = {
       const calculated = proposta.itens ? calculateProposalTotals(proposta.itens) : null;
       const sanitized = sanitizeData(calculated ? { ...proposta, itens: calculated.items, valor: calculated.investimentoInicial, totalProdutos: calculated.totalProdutos, totalServicos: calculated.totalServicos, totalMensal: calculated.totalMensal, totalAnual: calculated.totalAnual, investimentoInicial: calculated.investimentoInicial } : proposta);
       const docRef = doc(db, 'propostas', id);
+      const existingSnap = await getDoc(docRef);
+      const existingProposta = existingSnap.exists() ? existingSnap.data() as Proposta : null;
       
       const updateData: any = {
         ...sanitized,
         updatedAt: serverTimestamp()
       };
 
-      if (proposta.status === 'Aprovado') {
+      const isNewApproval = proposta.status === 'Aprovado' && existingProposta?.status !== 'Aprovado';
+      if (proposta.dataAprovacao) {
+        // Administradores podem informar/corrigir explicitamente a data real.
+        updateData.dataAprovacao = proposta.dataAprovacao;
+      } else if (isNewApproval) {
+        // Só atribui a data atual na transição efetiva para Aprovado.
+        // Editar um orçamento que já estava aprovado não pode alterar nem
+        // inventar sua data histórica de fechamento.
         updateData.dataAprovacao = new Date().toISOString();
       }
 
@@ -2915,7 +2924,7 @@ export const databaseService = {
                 // Atualizar Lead para Fechado
                 await updateDoc(leadRef, {
                   status: 'Fechado',
-                  dataFechamento: new Date().toISOString(),
+                  dataFechamento: updateData.dataAprovacao,
                   updatedAt: serverTimestamp()
                 });
               }
