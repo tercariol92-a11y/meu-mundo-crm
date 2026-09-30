@@ -17,7 +17,7 @@ import {
   Trophy,
   Info
 } from 'lucide-react';
-import { format, subDays, isWithinInterval, parseISO, startOfDay, endOfDay } from 'date-fns';
+import { format, subDays, isWithinInterval, parseISO, startOfDay, endOfDay, startOfMonth, endOfMonth } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'framer-motion';
 import { databaseService } from '../../services/databaseService';
@@ -51,20 +51,51 @@ interface RankingEntry {
   avaliacoesNegativas: number;
   percentualPositivas: number;
   score: number;
+  atendimentosWhatsapp: number;
+  chamadosExternos: number;
+  totalAtendimentos: number;
+  percentualCobertura: number;
+  avaliacoesNecessarias: number;
+  faltamAvaliacoes: number;
   elegivelRanking: boolean;
   status: 'META_ATINGIDA' | 'EM_QUALIFICACAO';
 }
 
 interface RankingResponse {
-  stats: { total: number; media: number; positivas: number; neutras: number; negativas: number; taxaSatisfacao: number; funcionariosQualificados: number; totalFuncionarios: number };
+  stats: { total: number; media: number; positivas: number; neutras: number; negativas: number; taxaSatisfacao: number; funcionariosQualificados: number; totalFuncionarios: number; totalAtendimentos: number; totalAtendimentosWhatsapp: number; totalChamadosExternos: number; taxaAvaliacao: number };
   ranking: { atendentes: RankingEntry[]; tecnicos: RankingEntry[] };
-  config: { minAvaliacoes: number; metaVolume: number };
+  config: { minAvaliacoes: number; metaVolume: number; metaCobertura: number };
 }
+
+const safeNumber = (value: unknown, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const normalizeRankingEntry = (entry: Partial<RankingEntry>): RankingEntry => ({
+  id: String(entry.id || entry.nome || ''),
+  nome: String(entry.nome || 'Profissional'),
+  totalAvaliacoes: safeNumber(entry.totalAvaliacoes),
+  media: safeNumber(entry.media),
+  avaliacoesPositivas: safeNumber(entry.avaliacoesPositivas),
+  avaliacoesNeutras: safeNumber(entry.avaliacoesNeutras),
+  avaliacoesNegativas: safeNumber(entry.avaliacoesNegativas),
+  percentualPositivas: safeNumber(entry.percentualPositivas),
+  score: safeNumber(entry.score),
+  atendimentosWhatsapp: safeNumber(entry.atendimentosWhatsapp),
+  chamadosExternos: safeNumber(entry.chamadosExternos),
+  totalAtendimentos: safeNumber(entry.totalAtendimentos, safeNumber(entry.totalAvaliacoes)),
+  percentualCobertura: safeNumber(entry.percentualCobertura),
+  avaliacoesNecessarias: safeNumber(entry.avaliacoesNecessarias),
+  faltamAvaliacoes: safeNumber(entry.faltamAvaliacoes),
+  elegivelRanking: Boolean(entry.elegivelRanking),
+  status: entry.status === 'META_ATINGIDA' ? 'META_ATINGIDA' : 'EM_QUALIFICACAO',
+});
 
 const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
   const [surveys, setSurveys] = useState<Survey[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterPeriod, setFilterPeriod] = useState('30'); // days
+  const [filterPeriod, setFilterPeriod] = useState('month');
   const [filterNote, setFilterNote] = useState('todos');
   const [searchTerm, setSearchTerm] = useState('');
   const [surveyToDelete, setSurveyToDelete] = useState<Survey | null>(null);
@@ -117,11 +148,39 @@ const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
       try {
         const idToken = await auth.currentUser?.getIdToken();
         if (!idToken) return;
-        const params = new URLSearchParams({ days: filterPeriod, note: filterNote, search: searchTerm });
+        const params = new URLSearchParams({ note: filterNote, search: searchTerm });
+        if (filterPeriod === 'month') params.set('month', format(new Date(), 'yyyy-MM'));
+        else params.set('days', filterPeriod);
         const response = await fetch(`/api/support/satisfaction-ranking?${params}`, { headers: { Authorization: `Bearer ${idToken}` } });
         const body = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(body.error || `Falha ao carregar ranking (HTTP ${response.status}).`);
-        setRankingData(body as RankingResponse);
+        const responseBody = body as Partial<RankingResponse>;
+        const rawStats = responseBody.stats || {} as RankingResponse['stats'];
+        setRankingData({
+          stats: {
+            total: safeNumber(rawStats.total),
+            media: safeNumber(rawStats.media),
+            positivas: safeNumber(rawStats.positivas),
+            neutras: safeNumber(rawStats.neutras),
+            negativas: safeNumber(rawStats.negativas),
+            taxaSatisfacao: safeNumber(rawStats.taxaSatisfacao),
+            funcionariosQualificados: safeNumber(rawStats.funcionariosQualificados),
+            totalFuncionarios: safeNumber(rawStats.totalFuncionarios),
+            totalAtendimentos: safeNumber(rawStats.totalAtendimentos),
+            totalAtendimentosWhatsapp: safeNumber(rawStats.totalAtendimentosWhatsapp),
+            totalChamadosExternos: safeNumber(rawStats.totalChamadosExternos),
+            taxaAvaliacao: safeNumber(rawStats.taxaAvaliacao),
+          },
+          ranking: {
+            atendentes: (responseBody.ranking?.atendentes || []).map(normalizeRankingEntry),
+            tecnicos: (responseBody.ranking?.tecnicos || []).map(normalizeRankingEntry),
+          },
+          config: {
+            minAvaliacoes: safeNumber(responseBody.config?.minAvaliacoes, 10),
+            metaVolume: safeNumber(responseBody.config?.metaVolume, 30),
+            metaCobertura: safeNumber(responseBody.config?.metaCobertura, 51),
+          },
+        });
         setRankingError('');
       } catch (error) {
         setRankingError(error instanceof Error ? error.message : 'Não foi possível carregar o ranking.');
@@ -132,21 +191,22 @@ const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
 
   const filteredSurveys = useMemo(() => {
     const now = new Date();
-    const startDate = subDays(now, parseInt(filterPeriod));
+    const startDate = filterPeriod === 'month' ? startOfMonth(now) : subDays(now, parseInt(filterPeriod));
+    const finalDate = filterPeriod === 'month' ? endOfMonth(now) : endOfDay(now);
 
     return surveys.filter(s => {
       let matchesPeriod = true;
       if (s.createdAt) {
         try {
           const date = parseISO(s.createdAt);
-          matchesPeriod = isWithinInterval(date, { start: startOfDay(startDate), end: endOfDay(now) });
+          matchesPeriod = isWithinInterval(date, { start: startOfDay(startDate), end: finalDate });
         } catch (e) {
           console.warn("Invalid date in survey:", s.createdAt);
           matchesPeriod = false;
         }
       } else {
         // If no date, only show if we are looking for 'all' or it was very recent (optimistic)
-        matchesPeriod = filterPeriod === '365'; 
+        matchesPeriod = filterPeriod === '365';
       }
       const matchesNote = filterNote === 'todos' || (filterNote === 'promotores' ? Number(s.nps) >= 9 : filterNote === 'neutros' ? Number(s.nps) >= 7 && Number(s.nps) <= 8 : filterNote === 'detratores' ? Number(s.nps) <= 6 : s.nota.toString() === filterNote);
       const matchesSearch = 
@@ -265,6 +325,7 @@ const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
             onChange={(e) => setFilterPeriod(e.target.value)}
           >
             <option value="7">Últimos 7 dias</option>
+            <option value="month">Este mês ({format(new Date(), 'MMMM yyyy', { locale: ptBR })})</option>
             <option value="30">Últimos 30 dias</option>
             <option value="90">Últimos 90 dias</option>
             <option value="365">Último ano</option>
@@ -337,10 +398,10 @@ const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
           <div className="space-y-1">
             <div className="flex items-center gap-1.5">
               <p className="text-sm font-medium text-gray-500">Campeão do período</p>
-              <span title="O ranking considera média, volume de avaliações e taxa de satisfação. São necessárias pelo menos 10 avaliações no período."><Info size={14} className="text-gray-400" /></span>
+              <span title="O ranking considera média, volume e satisfação. Para ser campeão, é necessário ter ao menos 10 avaliações e cobertura mínima de 51% dos atendimentos concluídos."><Info size={14} className="text-gray-400" /></span>
             </div>
             <h3 className="text-xl font-bold text-gray-900 truncate">{champion?.nome || 'Ainda sem atendente qualificado'}</h3>
-            {champion ? <p className="text-xs text-gray-500">⭐ {champion.media.toFixed(1)} · {champion.totalAvaliacoes} avaliações · {champion.percentualPositivas}% satisfação · Score {champion.score.toFixed(0)}/100</p> : <p className="text-xs text-gray-400">Faltam avaliações para formar o ranking.</p>}
+            {champion ? <p className="text-xs text-gray-500">⭐ {champion.media.toFixed(1)} · {champion.totalAvaliacoes}/{champion.totalAtendimentos} avaliados · {champion.percentualPositivas}% satisfação · Score {champion.score.toFixed(0)}/100</p> : <p className="text-xs text-gray-400">Nenhum profissional atingiu 51% de cobertura no período.</p>}
           </div>
         </motion.div>
 
@@ -363,9 +424,19 @@ const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
         </motion.div>
 
         <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <p className="text-sm font-medium text-gray-500">Atendimentos via WhatsApp</p>
+          <h3 className="text-2xl font-bold text-gray-900">{rankingData?.stats.totalAtendimentosWhatsapp || 0}</h3>
+          <p className="text-xs text-gray-500">Finalizados no período</p>
+        </div>
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <p className="text-sm font-medium text-gray-500">Chamados externos</p>
+          <h3 className="text-2xl font-bold text-gray-900">{rankingData?.stats.totalChamadosExternos || 0}</h3>
+          <p className="text-xs text-gray-500">Concluídos no período</p>
+        </div>
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
           <p className="text-sm font-medium text-gray-500">Melhor nota</p>
           <h3 className="text-xl font-bold text-gray-900 truncate">{highestAverage?.nome || '-'}</h3>
-          {highestAverage && <p className="text-xs text-gray-500">⭐ {highestAverage.media.toFixed(1)} · {highestAverage.totalAvaliacoes} avaliações · {highestAverage.elegivelRanking ? 'Qualificado' : `Em qualificação — ${highestAverage.totalAvaliacoes}/${rankingData?.config.minAvaliacoes || 10}`}</p>}
+          {highestAverage && <p className="text-xs text-gray-500">⭐ {highestAverage.media.toFixed(1)} · {highestAverage.totalAvaliacoes} avaliações · {highestAverage.elegivelRanking ? 'Qualificado' : `Em qualificação — faltam ${highestAverage.faltamAvaliacoes}`}</p>}
         </div>
         <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
           <p className="text-sm font-medium text-gray-500">Taxa de Satisfação</p>
@@ -373,9 +444,14 @@ const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
           <p className="text-xs text-gray-500">Notas 4 e 5</p>
         </div>
         <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <p className="text-sm font-medium text-gray-500">Cobertura das avaliações</p>
+          <h3 className="text-2xl font-bold text-gray-900">{rankingData?.stats.total || 0} de {rankingData?.stats.totalAtendimentos || 0}</h3>
+          <p className="text-xs text-gray-500">{rankingData?.stats.taxaAvaliacao?.toFixed(1) || '0.0'}% dos atendimentos concluídos</p>
+        </div>
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
           <p className="text-sm font-medium text-gray-500">Funcionários Qualificados</p>
           <h3 className="text-2xl font-bold text-gray-900">{rankingData?.stats.funcionariosQualificados || 0} de {rankingData?.stats.totalFuncionarios || 0}</h3>
-          <p className="text-xs text-gray-500">Meta mínima: {rankingData?.config.minAvaliacoes || 10} avaliações</p>
+          <p className="text-xs text-gray-500">Meta: {rankingData?.config.metaCobertura || 51}% avaliados e mínimo de {rankingData?.config.minAvaliacoes || 10}</p>
         </div>
         <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
           <p className="text-sm font-medium text-gray-500">Avaliações Positivas / Negativas</p>
@@ -391,16 +467,16 @@ const SatisfacaoView: React.FC<{ user: Usuario }> = ({ user }) => {
             <div className="p-4 border-b border-gray-100 flex items-center gap-2"><Trophy size={18} className="text-yellow-500" /><h2 className="font-semibold text-gray-900">Ranking de {kind === 'atendentes' ? 'Atendentes' : 'Técnicos'}</h2></div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 text-[10px] uppercase text-gray-500"><tr><th className="p-3 text-left">Posição</th><th className="p-3 text-left">Profissional</th><th className="p-3">Avaliações</th><th className="p-3">Média</th><th className="p-3">Satisfação</th><th className="p-3" title="Score calculado por média, volume, satisfação e penalização por avaliações negativas.">Score ⓘ</th></tr></thead>
+                <thead className="bg-gray-50 text-[10px] uppercase text-gray-500"><tr><th className="p-3 text-left">Posição</th><th className="p-3 text-left">Profissional</th><th className="p-3">WhatsApp</th><th className="p-3">Chamados externos</th><th className="p-3">Avaliados</th><th className="p-3">Cobertura</th><th className="p-3">Média</th><th className="p-3">Satisfação</th><th className="p-3" title="Score calculado por média, volume, satisfação e penalização por avaliações negativas.">Score ⓘ</th></tr></thead>
                 <tbody className="divide-y divide-gray-100">
                   {(rankingData?.ranking[kind] || []).map((entry, index) => (
                     <tr key={`${kind}-${entry.id}`}>
                       <td className="p-3 font-bold">{entry.elegivelRanking ? (index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : index + 1) : '—'}</td>
-                      <td className="p-3"><div className="font-semibold text-gray-900">{entry.nome}</div><div className={entry.elegivelRanking ? 'text-xs text-green-600' : 'text-xs text-amber-600'}>{entry.elegivelRanking ? '✓ Meta mínima atingida' : `Em qualificação — ${entry.totalAvaliacoes}/${rankingData?.config.minAvaliacoes || 10}`}</div></td>
-                      <td className="p-3 text-center">{entry.totalAvaliacoes}</td><td className="p-3 text-center">⭐ {entry.media.toFixed(1)}</td><td className="p-3 text-center">{entry.percentualPositivas.toFixed(0)}%</td><td className="p-3 text-center font-bold">{entry.score.toFixed(0)}</td>
+                      <td className="p-3"><div className="font-semibold text-gray-900">{entry.nome}</div><div className={entry.elegivelRanking ? 'text-xs text-green-600' : 'text-xs text-amber-600'}>{entry.elegivelRanking ? '✓ Meta de cobertura atingida' : `Faltam ${entry.faltamAvaliacoes} avaliações para a meta`}</div></td>
+                      <td className="p-3 text-center font-semibold text-green-700">{entry.atendimentosWhatsapp}</td><td className="p-3 text-center font-semibold text-blue-700">{entry.chamadosExternos}</td><td className="p-3 text-center">{entry.totalAvaliacoes} de {entry.totalAtendimentos}</td><td className="p-3 text-center">{entry.percentualCobertura.toFixed(1)}%</td><td className="p-3 text-center">⭐ {entry.media.toFixed(1)}</td><td className="p-3 text-center">{entry.percentualPositivas.toFixed(0)}%</td><td className="p-3 text-center font-bold">{entry.score.toFixed(0)}</td>
                     </tr>
                   ))}
-                  {!rankingData?.ranking[kind].length && <tr><td colSpan={6} className="p-6 text-center text-gray-400">Nenhuma avaliação no período.</td></tr>}
+                  {!rankingData?.ranking[kind].length && <tr><td colSpan={9} className="p-6 text-center text-gray-400">Nenhuma avaliação no período.</td></tr>}
                 </tbody>
               </table>
             </div>

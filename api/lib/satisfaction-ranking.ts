@@ -1,5 +1,6 @@
 export const MIN_AVALIACOES_RANKING = 10;
 export const META_VOLUME_RANKING = 30;
+export const META_COBERTURA_RANKING = 51;
 
 export type SatisfactionReviewForRanking = {
   nota: number;
@@ -20,18 +21,46 @@ export type SatisfactionRankEntry = {
   notasCinco: number;
   percentualPositivas: number;
   score: number;
+  atendimentosWhatsapp: number;
+  chamadosExternos: number;
+  totalAtendimentos: number;
+  percentualCobertura: number;
+  avaliacoesNecessarias: number;
+  faltamAvaliacoes: number;
   elegivelRanking: boolean;
   status: 'META_ATINGIDA' | 'EM_QUALIFICACAO';
 };
 
+export type SatisfactionAttendanceForRanking = {
+  id?: string;
+  nome?: string;
+  total: number;
+  atendimentosWhatsapp?: number;
+  chamadosExternos?: number;
+};
+
 const normalizedKey = (id: string | undefined, name: string | undefined) =>
-  String(id || name || '').trim().toLocaleLowerCase('pt-BR');
+  String(name || id || '').trim().toLocaleLowerCase('pt-BR');
 
 export function calculateSatisfactionRanking(
   reviews: SatisfactionReviewForRanking[],
   role: 'atendente' | 'tecnico',
+  attendances: SatisfactionAttendanceForRanking[] = [],
 ): SatisfactionRankEntry[] {
+  const attendanceTotals = new Map<string, { total: number; whatsapp: number; externos: number }>();
   const grouped = new Map<string, { id: string; nome: string; notas: number[] }>();
+  for (const attendance of attendances) {
+    const key = normalizedKey(attendance.id, attendance.nome);
+    if (!key) continue;
+    const currentTotals = attendanceTotals.get(key) || { total: 0, whatsapp: 0, externos: 0 };
+    currentTotals.total += Math.max(0, Number(attendance.total) || 0);
+    currentTotals.whatsapp += Math.max(0, Number(attendance.atendimentosWhatsapp) || 0);
+    currentTotals.externos += Math.max(0, Number(attendance.chamadosExternos) || 0);
+    attendanceTotals.set(key, currentTotals);
+    if (!grouped.has(key) && String(attendance.nome || '').trim()) {
+      grouped.set(key, { id: String(attendance.id || key), nome: String(attendance.nome).trim(), notas: [] });
+    }
+  }
   for (const review of reviews) {
     const id = role === 'atendente' ? review.atendenteId : review.tecnicoId;
     const nome = String(role === 'atendente' ? review.atendente : review.tecnico || '').trim();
@@ -48,12 +77,19 @@ export function calculateSatisfactionRanking(
     const positivas = person.notas.filter(nota => nota >= 4).length;
     const neutras = person.notas.filter(nota => nota === 3).length;
     const negativas = person.notas.filter(nota => nota <= 2).length;
-    const media = person.notas.reduce((sum, nota) => sum + nota, 0) / total;
-    const positividade = positivas / total;
-    const taxaNegativas = negativas / total;
+    const media = total ? person.notas.reduce((sum, nota) => sum + nota, 0) / total : 0;
+    const positividade = total ? positivas / total : 0;
+    const taxaNegativas = total ? negativas / total : 0;
     const scoreBase = (media / 5 * 0.5) + (Math.min(total / META_VOLUME_RANKING, 1) * 0.3) + (positividade * 0.2);
     const score = Math.max(0, Math.min(100, scoreBase * 100 - taxaNegativas * 15));
-    const elegivelRanking = total >= MIN_AVALIACOES_RANKING;
+    // Reviews created before attendance coverage was introduced remain measurable.
+    // Whenever completed-attendance data exists, it becomes the official denominator.
+    const attendance = attendanceTotals.get(normalizedKey(person.id, person.nome)) || { total: 0, whatsapp: 0, externos: 0 };
+    const totalAtendimentos = Math.max(total, attendance.total);
+    const avaliacoesNecessarias = Math.ceil(totalAtendimentos * (META_COBERTURA_RANKING / 100));
+    const percentualCobertura = totalAtendimentos ? Math.min(100, total / totalAtendimentos * 100) : 0;
+    const faltamAvaliacoes = Math.max(0, MIN_AVALIACOES_RANKING - total, avaliacoesNecessarias - total);
+    const elegivelRanking = total >= MIN_AVALIACOES_RANKING && percentualCobertura >= META_COBERTURA_RANKING;
     return {
       id: person.id,
       nome: person.nome,
@@ -65,6 +101,12 @@ export function calculateSatisfactionRanking(
       notasCinco: person.notas.filter(nota => nota === 5).length,
       percentualPositivas: Number((positividade * 100).toFixed(1)),
       score: Number(score.toFixed(1)),
+      atendimentosWhatsapp: attendance.whatsapp,
+      chamadosExternos: attendance.externos,
+      totalAtendimentos,
+      percentualCobertura: Number(percentualCobertura.toFixed(1)),
+      avaliacoesNecessarias: Math.max(MIN_AVALIACOES_RANKING, avaliacoesNecessarias),
+      faltamAvaliacoes,
       elegivelRanking,
       status: (elegivelRanking ? 'META_ATINGIDA' : 'EM_QUALIFICACAO') as SatisfactionRankEntry['status'],
     };

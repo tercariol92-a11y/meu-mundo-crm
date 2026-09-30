@@ -8,6 +8,7 @@ import { randomUUID } from 'crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 import type { Bucket } from '@google-cloud/storage';
 import { createSatisfactionRequest, detectSatisfactionScore, hasPendingSatisfactionRequest, processSatisfactionResponse } from './satisfactionService';
+import { DEFAULT_WHATSAPP_INACTIVITY_MINUTES, shouldAutoCloseInactiveAttendance } from './whatsappInactivity';
 
 export type SessionStatus = 'disconnected'|'connecting'|'qrcode'|'connected'|'error';
 export type WhatsAppSession = { userId:string; sessionId:string; socket:WASocket|null; status:SessionStatus; phone:string; qrCodeDataUrl:string; lastConnectedAt:string|null; reconnectAttempts:number; authDirectory:string; reconnectTimer?:ReturnType<typeof setTimeout>; qrExpiryTimer?:ReturnType<typeof setTimeout>; connectTimeoutTimer?:ReturnType<typeof setTimeout>; generation:number; createdAtMs:number; lastStatusAtMs:number; lastError:string };
@@ -16,6 +17,8 @@ const activeSessionByUid = new Map<string,string>();
 const logger = pino({level:'silent'});
 let db:any=null;
 let mediaBucket:Bucket|null=null;
+let inactivityMonitor:ReturnType<typeof setInterval>|null=null;
+let inactivitySweepRunning=false;
 const ROOT=path.resolve(process.env.BAILEYS_AUTH_ROOT||path.join(process.cwd(),'auth_info_baileys'));
 const safeUid=(uid:string)=>{if(!/^[A-Za-z0-9_-]{6,128}$/.test(uid))throw new Error('UID inválido.');return uid};
 const sessionIdOf=(uid:string,phone:string)=>`${safeUid(uid)}_${String(phone||'pending').replace(/\D/g,'')||'pending'}`;
@@ -452,7 +455,72 @@ async function onSessionMessage(s: WhatsAppSession, msg: any) {
   if(!msg.key.fromMe)await recordIncomingResponseWindow(s,leadRef.id,phone,leadData?.nome||msg.pushName||'Contato WhatsApp',leadData?.assignedUserId||s.userId,leadData?.assignedUserName||ownerData.name,messageId);
 }
 
-export function initWhatsAppSessions(database:any,bucket:Bucket|null=null){db=database;mediaBucket=bucket;return initializeExistingSessions()}
+const inactivityMinutes=()=>Math.max(1,Number(process.env.WHATSAPP_INACTIVITY_CLOSE_MINUTES||DEFAULT_WHATSAPP_INACTIVITY_MINUTES));
+async function autoCloseInactiveAttendance(document:any){
+  const lead=document.data()||{};
+  const ownerUid=String(lead.whatsappSessionOwnerUid||lead.ownerUserId||lead.assignedUserId||'').trim();
+  const phone=String(lead.telefone||lead.phone||lead.whatsapp||'').replace(/\D/g,'');
+  const session=getWhatsAppSession(ownerUid);
+  if(!ownerUid||!phone||!session?.socket||session.status!=='connected')return;
+  let claimed=false;
+  await db.runTransaction(async(tx:any)=>{
+    const fresh=await tx.get(document.ref);const data=fresh.data()||{};
+    if(!shouldAutoCloseInactiveAttendance(data,Date.now(),inactivityMinutes()))return;
+    tx.set(document.ref,{inactivityClosingAt:FieldValue.serverTimestamp(),inactivityCloseStatus:'processing',updatedAt:FieldValue.serverTimestamp()},{merge:true});
+    claimed=true;
+  });
+  if(!claimed)return;
+  try{
+    const attendantName=String(lead.assignedUserName||lead.atendenteFinalizacao||(await owner(ownerUid)).name||'Atendente');
+    const context={manualFromAtendimento:true,conversationId:document.id,attendantId:lead.assignedUserId||ownerUid,attendantName};
+    const closed=await sendSessionMessage(ownerUid,phone,'⏱️ Este atendimento foi encerrado automaticamente após 30 minutos sem novas mensagens.',context);
+    const survey=await sendSessionMessage(ownerUid,phone,'Como você avalia o atendimento realizado? Responda com uma nota de 1 a 5, sendo 5 excelente.',context);
+    const finalizedAt=FieldValue.serverTimestamp();
+    const requestId=await createSatisfactionRequest(db,{
+      conversationId:document.id,leadId:document.id,clientId:lead.clienteId||'',clientName:lead.nome||lead.clientName||'Contato WhatsApp',
+      contactPhone:phone,atendimentoId:lead.attendanceId||lead.atendimentoId||document.id,ticketId:lead.ticketId||'',
+      assignedUserId:lead.assignedUserId||ownerUid,assignedUserName:attendantName,
+      technicianId:lead.technicianId||lead.tecnicoId||'',technicianName:lead.technicianName||lead.tecnicoNome||lead.tecnico||'',
+      profilePictureUrl:lead.profilePictureUrl||lead.photoUrl||'',whatsappSessionOwnerUid:ownerUid,
+      whatsappMessageId:survey.messageId,companyId:lead.companyId||'',tenantId:lead.tenantId||'',finalizedAt:new Date().toISOString()
+    });
+    await document.ref.set({
+      status:'Finalizado',attendanceStatus:'Finalizado',finalizedAt,atendimentoFinalizadoEm:finalizedAt,
+      finalizedByUid:lead.assignedUserId||ownerUid,finalizedByName:attendantName,finalizationReason:'inatividade_30_minutos',
+      awaitingSatisfactionRating:true,pesquisaPendente:true,satisfactionSurveyStatus:'pending',satisfactionRequestId:requestId,
+      satisfactionRequestedAt:finalizedAt,inactivityAutoClosedAt:finalizedAt,inactivityCloseStatus:'closed',
+      inactivityWarningMessageId:closed.messageId,inactivitySurveyMessageId:survey.messageId,unreadCount:0,updatedAt:finalizedAt
+    },{merge:true});
+    console.log('[WHATSAPP INACTIVITY CLOSED]',{leadId:document.id,minutes:inactivityMinutes(),surveyRequested:true});
+  }catch(error){
+    const message=error instanceof Error?error.message:'falha desconhecida';
+    await document.ref.set({inactivityCloseStatus:'failed',inactivityCloseError:message,updatedAt:FieldValue.serverTimestamp()},{merge:true});
+    console.error('[WHATSAPP INACTIVITY CLOSE ERROR]',{leadId:document.id,error:message});
+  }
+}
+async function sweepInactiveAttendances(){
+  if(!db||inactivitySweepRunning)return;
+  inactivitySweepRunning=true;
+  try{
+    const [byStatus,byAttendanceStatus]=await Promise.all([
+      db.collection('leads').where('status','==','Em atendimento').get(),
+      db.collection('leads').where('attendanceStatus','==','Em atendimento').get()
+    ]);
+    const documents=new Map<string,any>();
+    for(const document of [...byStatus.docs,...byAttendanceStatus.docs])documents.set(document.id,document);
+    for(const document of documents.values()){
+      if(shouldAutoCloseInactiveAttendance(document.data()||{},Date.now(),inactivityMinutes()))await autoCloseInactiveAttendance(document);
+    }
+  }catch(error){console.error('[WHATSAPP INACTIVITY SWEEP ERROR]',{error:error instanceof Error?error.message:'falha desconhecida'});}
+  finally{inactivitySweepRunning=false;}
+}
+function startInactivityMonitor(){
+  if(inactivityMonitor)return;
+  const initial=setTimeout(()=>void sweepInactiveAttendances(),15_000);initial.unref?.();
+  inactivityMonitor=setInterval(()=>void sweepInactiveAttendances(),60_000);inactivityMonitor.unref?.();
+  console.log('[WHATSAPP INACTIVITY MONITOR]',{enabled:true,closeAfterMinutes:inactivityMinutes()});
+}
+export function initWhatsAppSessions(database:any,bucket:Bucket|null=null){db=database;mediaBucket=bucket;startInactivityMonitor();return initializeExistingSessions()}
 export function getWhatsAppSession(uid:string){const safe=safeUid(uid);const sessionId=activeSessionByUid.get(safe);return sessionId?sessions.get(sessionId)||null:null}
 export function getWhatsAppSocket(uid:string){return getWhatsAppSession(uid)?.socket||null}
 const isCurrentSession=(uid:string,s:WhatsAppSession)=>getWhatsAppSession(uid)===s;
