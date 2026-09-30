@@ -237,7 +237,7 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
       }
       const signedAt = chamado.customerSignedAt || chamado.assinaturaData || new Date().toISOString();
       const signedBy = chamado.customerSignedBy || (chamado.cliente as any)?.responsavelNome || chamado.clienteNome || 'Cliente';
-      await databaseService.updateChamado(chamado.id, {
+      const updateResult = await databaseService.updateChamado(chamado.id, {
         status: 'concluido',
         solucaoAplicada: solucao,
         observacoesTecnicas: obs,
@@ -258,7 +258,11 @@ export default function ServiceOrder({ chamadoId, onClose, onUpdate, onEdit, use
         throw new Error('A Ordem de Serviço não confirmou a finalização no banco de dados.');
       }
       onUpdate();
-      onClose();
+      if (sendSatisfactionSurvey && updateResult?.satisfactionResult && !updateResult.satisfactionResult.success) {
+        setError(`Atendimento finalizado, mas a pesquisa não foi enviada: ${updateResult.satisfactionResult.error || updateResult.satisfactionResult.reason || 'verifique o e-mail e WhatsApp do cliente.'}`);
+      } else {
+        onClose();
+      }
     } catch (err) {
       console.error('[SERVICE ORDER SIGNATURE ERROR]', { orderId: chamado.id, error: err });
       setSignatureStatus('idle');

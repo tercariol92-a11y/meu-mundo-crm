@@ -2756,8 +2756,21 @@ export const databaseService = {
 
       const technicianChanged = chamado.tecnicoId !== undefined && chamado.tecnicoId !== previousTicket?.tecnicoId;
       if (technicianChanged) void this.getChamadoById(id).then(updated => updated && notifyAssignedTechnician(updated)).catch(error => console.error('[SUPPORT TECHNICIAN NOTIFICATION]', error));
+      let satisfactionResult: Awaited<ReturnType<typeof requestTicketSatisfaction>> | null = null;
       if (chamado.status === 'concluido' && sendSatisfactionSurvey !== false && previousTicket?.status !== 'concluido') {
-        void this.getChamadoById(id).then(updated => updated && requestTicketSatisfaction(updated)).catch(error => console.error('[SUPPORT SATISFACTION NOTIFICATION]', error));
+        try {
+          const updated = await this.getChamadoById(id);
+          satisfactionResult = updated ? await requestTicketSatisfaction(updated) : {
+            success: false,
+            emailSent: false,
+            whatsappSent: false,
+            error: 'Chamado finalizado, mas não foi possível recarregá-lo para enviar a pesquisa.'
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Falha ao enviar a pesquisa de satisfação.';
+          console.error('[SUPPORT SATISFACTION NOTIFICATION]', message);
+          satisfactionResult = { success: false, emailSent: false, whatsappSent: false, error: message };
+        }
       }
 
       // Trigger WhatsApp based on status change
@@ -2787,6 +2800,7 @@ export const databaseService = {
           }
         });
       }
+      return { success: true, satisfactionResult };
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `chamados/${id}`);
     }

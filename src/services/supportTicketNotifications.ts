@@ -2,6 +2,7 @@ import { collection, doc, getDoc, getDocs, query, updateDoc, where } from './res
 import { auth, db } from '../firebase';
 import { Chamado, Cliente, Tecnico, Unidade, Usuario } from '../types';
 import { whatsappService } from './whatsapp.service';
+import { clientContactsService } from './clientContactsService';
 
 const digits = (value?: unknown) => String(value || '').replace(/\D/g, '');
 const maskPhone = (value: string) => value.length > 4 ? `${'*'.repeat(Math.max(0, value.length - 4))}${value.slice(-4)}` : '****';
@@ -76,9 +77,16 @@ async function sha256(value: string) {
 }
 
 export async function requestTicketSatisfaction(ticket: Chamado) {
-  if (!ticket.id || ticket.satisfactionSurveyStatus === 'answered' || ticket.satisfactionRequestedAt) return { success: false, skipped: true, reason: 'Pesquisa já solicitada ou respondida.' };
+  if (!ticket.id || ticket.satisfactionSurveyStatus === 'answered') return { success: false, skipped: true, reason: 'Pesquisa já respondida.' };
+  if (ticket.satisfactionSurveyStatus === 'pending' && ticket.satisfactionRequestedAt) return { success: false, skipped: true, reason: 'Pesquisa já enviada.' };
   const { client } = await ticketContext(ticket);
-  const phone = digits(client?.celularWhatsapp || client?.telefoneFixo);
+  const contacts = client ? await clientContactsService.list(client).catch(() => []) : [];
+  const supportContacts = clientContactsService.byPurpose(contacts, 'chamados');
+  const whatsappContact = supportContacts.find(contact => digits(contact.celularWhatsapp || contact.telefone))
+    || contacts.find(contact => contact.recebeWhatsapp && digits(contact.celularWhatsapp || contact.telefone));
+  const emailContact = supportContacts.find(contact => String(contact.email || '').trim())
+    || contacts.find(contact => contact.isPrimary && String(contact.email || '').trim());
+  const phone = digits(whatsappContact?.celularWhatsapp || whatsappContact?.telefone || client?.celularWhatsapp || client?.telefoneFixo);
   const token = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll('-', '');
   const tokenHash = await sha256(token);
   const link = `${window.location.origin}/avaliar-chamado?token=${encodeURIComponent(token)}`;
@@ -86,8 +94,18 @@ export async function requestTicketSatisfaction(ticket: Chamado) {
   const clientName = client?.nomeFantasia || client?.razaoSocial || ticket.clienteNome || 'Cliente';
   const technicianName = ticket.tecnico?.nome || 'Equipe Mundo Tech';
   const message = `Olá, ${clientName}.\n\nO chamado #${number} foi concluído pela Mundo Tech.\n\nSua opinião é importante para nós. Avalie o atendimento pelo link seguro (leva menos de 1 minuto):\n${link}`;
-  const email = String(client?.emailPrincipal || client?.emailTecnico || client?.emailFinanceiro || '').trim();
-  await updateDoc(doc(db, 'chamados', ticket.id), { satisfactionTokenHash: tokenHash, satisfactionSurveyStatus: 'pending', satisfactionRequestedAt: new Date().toISOString(), satisfactionTechnicianId: ticket.tecnicoId || '', satisfactionTechnicianName: technicianName, satisfactionClientName: clientName, satisfactionOrigin: email && phone ? 'email_and_whatsapp' : email ? 'email' : 'whatsapp' });
+  const email = String(emailContact?.email || client?.emailPrincipal || client?.emailTecnico || client?.emailFinanceiro || '').trim();
+  const attemptedAt = new Date().toISOString();
+  await updateDoc(doc(db, 'chamados', ticket.id), {
+    satisfactionTokenHash: tokenHash,
+    satisfactionSurveyStatus: 'sending',
+    satisfactionAttemptedAt: attemptedAt,
+    satisfactionSurveyError: '',
+    satisfactionTechnicianId: ticket.tecnicoId || '',
+    satisfactionTechnicianName: technicianName,
+    satisfactionClientName: clientName,
+    satisfactionOrigin: email && phone ? 'email_and_whatsapp' : email ? 'email' : phone ? 'whatsapp' : 'none'
+  });
 
   let emailSent = false;
   let whatsappSent = false;
@@ -125,6 +143,19 @@ export async function requestTicketSatisfaction(ticket: Chamado) {
     errors.push('Cliente sem WhatsApp cadastrado.');
     await appendHistory(ticket.id, { type: 'satisfaction_survey', status: 'error', createdAt: new Date().toISOString(), error: 'Cliente sem WhatsApp cadastrado.' });
   }
-  if (!emailSent && !whatsappSent) await updateDoc(doc(db, 'chamados', ticket.id), { satisfactionSurveyStatus: 'send_failed' });
+  const sent = emailSent || whatsappSent;
+  await updateDoc(doc(db, 'chamados', ticket.id), sent ? {
+    satisfactionSurveyStatus: 'pending',
+    satisfactionRequestedAt: attemptedAt,
+    satisfactionEmailSent: emailSent,
+    satisfactionWhatsappSent: whatsappSent,
+    satisfactionSurveyError: errors.join(' ')
+  } : {
+    satisfactionSurveyStatus: 'send_failed',
+    satisfactionRequestedAt: null,
+    satisfactionEmailSent: false,
+    satisfactionWhatsappSent: false,
+    satisfactionSurveyError: errors.join(' ') || 'Nenhum canal disponível para enviar a pesquisa.'
+  });
   return { success: emailSent || whatsappSent, emailSent, whatsappSent, error: errors.join(' ') || undefined };
 }

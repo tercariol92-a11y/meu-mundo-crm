@@ -481,9 +481,13 @@ export interface Chamado {
     error?: string;
   }>;
   sendSatisfactionSurvey?: boolean;
-  satisfactionSurveyStatus?: 'pending' | 'answered' | 'send_failed';
+  satisfactionSurveyStatus?: 'sending' | 'pending' | 'answered' | 'send_failed';
   satisfactionTokenHash?: string;
   satisfactionRequestedAt?: string;
+  satisfactionAttemptedAt?: string;
+  satisfactionEmailSent?: boolean;
+  satisfactionWhatsappSent?: boolean;
+  satisfactionSurveyError?: string;
   satisfactionRating?: number;
   satisfactionNps?: number;
   satisfactionRatings?: {

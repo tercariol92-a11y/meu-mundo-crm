@@ -24,7 +24,14 @@ export default async function handler(req: any, res: any) {
     if (ticket.satisfactionTokenHash !== hashToken(token)) return res.status(403).json({ success: false, error: 'Token da pesquisa não corresponde ao chamado.' });
     const clientSnap = ticket.clienteId ? await db.collection('clientes').doc(ticket.clienteId).get() : null;
     const client = clientSnap?.exists ? clientSnap.data() || {} : ticket.cliente || {};
-    const email = String(client.emailPrincipal || client.emailTecnico || client.emailFinanceiro || '').trim();
+    const contactsSnap = ticket.clienteId
+      ? await db.collection('clientes').doc(ticket.clienteId).collection('contatos').get()
+      : null;
+    const contacts = contactsSnap?.docs.map((contactDoc: any) => ({ id: contactDoc.id, ...contactDoc.data() })) || [];
+    const contactWithEmail = contacts.find((contact: any) => contact.recebeChamados && String(contact.email || '').trim())
+      || contacts.find((contact: any) => contact.isPrimary && String(contact.email || '').trim())
+      || contacts.find((contact: any) => String(contact.email || '').trim());
+    const email = String(contactWithEmail?.email || client.emailPrincipal || client.emailTecnico || client.emailFinanceiro || '').trim();
     if (!email) return res.status(422).json({ success: false, error: 'Cliente sem e-mail cadastrado.' });
 
     const config = await getSmtpConfig();
