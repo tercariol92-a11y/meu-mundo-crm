@@ -11,6 +11,7 @@ import { databaseService } from '../services/databaseService';
 import { fiscalApi } from '../services/fiscalApi';
 import RecurringBillingQueue from './fiscal/RecurringBillingQueue';
 import { buildValidatedNfseDraft, fiscalA1SessionRef, issueNfseWithValidatedEngine } from '../services/nfseIssuanceService';
+import { downloadBtgBoletoWorkbook, validateBtgBoletoItems } from '../services/btgBoletoSpreadsheetService';
 import { 
   Cliente, Produto, NotaFiscalProduto, NotaFiscalServico, 
   BoletoBancario, ContaBancaria, ConfiguracaoFiscal, Usuario,
@@ -32,6 +33,8 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
   const [nfseList, setNfseList] = useState<NotaFiscalServico[]>([]);
   const [contracts, setContracts] = useState<any[]>([]);
   const [boletos, setBoletos] = useState<BoletoBancario[]>([]);
+  const [selectedBoletoIds, setSelectedBoletoIds] = useState<string[]>([]);
+  const [isExportingBtg, setIsExportingBtg] = useState(false);
   const [contasBancarias, setContasBancarias] = useState<ContaBancaria[]>([]);
   const [configFiscal, setConfigFiscal] = useState<ConfiguracaoFiscal | null>(null);
   const [csrtId, setCsrtId] = useState('');
@@ -1267,6 +1270,49 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
     return matchesSearch && matchesStatus;
   });
 
+  const selectableBoletos = filteredBoletos.filter(b => b.status === 'Pendente');
+  const allVisibleBoletosSelected = selectableBoletos.length > 0 && selectableBoletos.every(b => selectedBoletoIds.includes(b.id));
+
+  const toggleBoletoSelection = (boletoId: string) => {
+    setSelectedBoletoIds(current => current.includes(boletoId)
+      ? current.filter(id => id !== boletoId)
+      : [...current, boletoId]);
+  };
+
+  const toggleAllVisibleBoletos = () => {
+    const visibleIds = selectableBoletos.map(b => b.id);
+    setSelectedBoletoIds(current => allVisibleBoletosSelected
+      ? current.filter(id => !visibleIds.includes(id))
+      : Array.from(new Set([...current, ...visibleIds])));
+  };
+
+  const handleExportBtgSpreadsheet = async () => {
+    const selected = boletos.filter(b => selectedBoletoIds.includes(b.id) && b.status === 'Pendente');
+    if (!selected.length) return showToast('Selecione ao menos um boleto pendente.', 'info');
+    const items = selected.flatMap(boleto => {
+      const cliente = clientes.find(item => item.id === boleto.clienteId);
+      return cliente ? [{ boleto, cliente }] : [];
+    });
+    if (items.length !== selected.length) {
+      const missingClients = selected.filter(b => !clientes.some(c => c.id === b.clienteId)).map(b => b.clienteNome);
+      return showToast(`Cadastro do cliente não localizado: ${missingClients.join(', ')}`, 'error');
+    }
+    const issues = validateBtgBoletoItems(items);
+    if (issues.length) {
+      const detail = issues.slice(0, 2).map(issue => `${issue.clienteNome}: ${issue.fields.join(', ')}`).join(' | ');
+      return showToast(`Corrija antes de exportar: ${detail}${issues.length > 2 ? ` e mais ${issues.length - 2}` : ''}`, 'error');
+    }
+    setIsExportingBtg(true);
+    try {
+      await downloadBtgBoletoWorkbook(items);
+      showToast(`Planilha BTG gerada com ${items.length} cobrança(s). Abra no Excel para validar antes de enviar ao banco.`);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Não foi possível gerar a planilha BTG.', 'error');
+    } finally {
+      setIsExportingBtg(false);
+    }
+  };
+
   // Calculate high level metrics
   const totalFaturamentoServicos = nfseList.filter(n => n.status === 'AUTORIZADA' || n.status === 'Autorizada').reduce((acc, cr) => acc + cr.valorServico, 0);
   const totalFaturamentoProdutos = nfeList.filter(n => n.status === 'Autorizada').reduce((acc, cr) => acc + cr.valorProduto, 0);
@@ -1570,7 +1616,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                   />
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <ListFilter size={14} className="text-slate-400" />
                   <select
                     value={statusFilter}
@@ -1702,7 +1748,7 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                   />
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <ListFilter size={14} className="text-slate-400" />
                   <select
                     value={statusFilter}
@@ -1844,7 +1890,17 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                   />
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleExportBtgSpreadsheet}
+                    disabled={!selectedBoletoIds.length || isExportingBtg}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3 py-1.5 text-[10px] font-black uppercase tracking-wide text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-200"
+                    title="Gerar uma cópia preenchida do modelo oficial BTG, sem enviar ao banco"
+                  >
+                    {isExportingBtg ? <RefreshCw size={13} className="animate-spin" /> : <Download size={13} />}
+                    Gerar planilha BTG ({selectedBoletoIds.length})
+                  </button>
                   <ListFilter size={14} className="text-slate-400" />
                   <select
                     value={statusFilter}
@@ -1870,6 +1926,16 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-100 text-[10px] text-slate-400 uppercase font-bold tracking-wider">
+                        <th className="p-3 w-10">
+                          <input
+                            type="checkbox"
+                            checked={allVisibleBoletosSelected}
+                            onChange={toggleAllVisibleBoletos}
+                            disabled={!selectableBoletos.length}
+                            aria-label="Selecionar boletos pendentes visíveis"
+                            className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600"
+                          />
+                        </th>
                         <th className="p-3">Nosso Número</th>
                         <th className="p-3">Banco / Convênio</th>
                         <th className="p-3">Cliente Destinatário</th>
@@ -1883,6 +1949,17 @@ export default function FinanceiroFiscalArea({ user }: FinanceiroFiscalAreaProps
                     <tbody className="divide-y divide-slate-100 text-xs">
                       {filteredBoletos.map(b => (
                         <tr key={b.id} className="hover:bg-slate-50/50">
+                          <td className="p-3">
+                            <input
+                              type="checkbox"
+                              checked={selectedBoletoIds.includes(b.id)}
+                              onChange={() => toggleBoletoSelection(b.id)}
+                              disabled={b.status !== 'Pendente'}
+                              aria-label={`Selecionar boleto de ${b.clienteNome}`}
+                              title={b.status === 'Pendente' ? 'Selecionar para a planilha BTG' : 'Somente boletos pendentes podem ser exportados'}
+                              className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 disabled:opacity-30"
+                            />
+                          </td>
                           <td className="p-3 font-semibold text-slate-700">
                             {b.nossoNumero}
                           </td>
