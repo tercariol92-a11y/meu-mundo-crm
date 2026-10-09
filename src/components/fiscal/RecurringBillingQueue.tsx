@@ -1,5 +1,5 @@
 import React, { MutableRefObject, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, CheckSquare, Download, FileText, MessageCircle, Printer, RefreshCw, Send, Square, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CheckSquare, Download, FileText, MessageCircle, Paperclip, Printer, RefreshCw, Save, Send, Square, X } from 'lucide-react';
 import { Cliente, ClienteContato, ConfiguracaoFiscal, ContratoRecorrente, FaturamentoRecorrente, Usuario } from '../../types';
 import { buildRecurringBilling, generateRecurringBillings, listRecurringBillings, updateRecurringBilling } from '../../services/recurringBillingService';
 import { buildValidatedNfseDraft, issueNfseWithValidatedEngine, validateNfseDraftData } from '../../services/nfseIssuanceService';
@@ -49,6 +49,9 @@ export default function RecurringBillingQueue({ user, contracts, clients, config
   const [whatsappContacts, setWhatsappContacts] = useState<ClienteContato[]>([]);
   const [selectedWhatsappContacts, setSelectedWhatsappContacts] = useState<string[]>([]);
   const [whatsappLoading, setWhatsappLoading] = useState(false);
+  const [savingWhatsappContactId, setSavingWhatsappContactId] = useState('');
+  const [whatsappFeedback, setWhatsappFeedback] = useState('');
+  const [boletoFile, setBoletoFile] = useState<File | null>(null);
   const [selectedDocuments, setSelectedDocuments] = useState<string[]>([]);
   const [batchSummary, setBatchSummary] = useState<{ processed: number; authorized: number; errors: number; billedAmount: number; items: FaturamentoRecorrente[]; failures: Array<{ id: string; contractNumber: string; clientName: string; code?: string; message: string }> } | null>(null);
   const companyId = user.companyId || user.tenantId || user.empresaId || 'default';
@@ -235,15 +238,60 @@ export default function RecurringBillingQueue({ user, contracts, clients, config
     if (!accessKey(item)) return setMessage('Chave oficial da NFS-e não encontrada.');
     setWhatsappLoading(true); setMessage('');
     try {
-      const contacts = (await clientContactsService.list(client)).filter(contact => digits(contact.celularWhatsapp || contact.telefone).length >= 10);
-      if (!contacts.length) return setMessage('O cliente não possui contato com WhatsApp cadastrado.');
-      const preferred = clientContactsService.byPurpose(contacts, 'notaFiscal');
+      const contacts = await clientContactsService.list(client);
+      if (!contacts.length) return setMessage('O cliente não possui contatos cadastrados. Cadastre um contato antes de enviar a nota fiscal.');
+      const preferred = clientContactsService.byPurpose(contacts, 'notaFiscal')
+        .filter(contact => digits(contact.celularWhatsapp || contact.telefone).length >= 10);
       setWhatsappBilling(item);
       setWhatsappContacts(contacts);
       setSelectedWhatsappContacts(preferred.map(contact => contact.id));
+      setBoletoFile(null);
+      setWhatsappFeedback('');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Não foi possível carregar os contatos do cliente.');
     } finally { setWhatsappLoading(false); }
+  };
+
+  const changeWhatsappNumber = (contactId: string, value: string) => {
+    setWhatsappContacts(current => current.map(contact => contact.id === contactId ? { ...contact, celularWhatsapp: value } : contact));
+    if (digits(value).length < 10) setSelectedWhatsappContacts(current => current.filter(id => id !== contactId));
+    setWhatsappFeedback('');
+  };
+
+  const saveWhatsappNumber = async (contactId: string) => {
+    if (!whatsappBilling || savingWhatsappContactId) return;
+    const contact = whatsappContacts.find(candidate => candidate.id === contactId);
+    if (!contact) return;
+    const phone = digits(contact.celularWhatsapp || contact.telefone);
+    if (phone.length < 10 || phone.length > 13) {
+      setWhatsappFeedback('Informe um WhatsApp válido, com DDD e entre 10 e 13 números.');
+      return;
+    }
+    setSavingWhatsappContactId(contactId);
+    setWhatsappFeedback('');
+    try {
+      const persisted = await clientContactsService.saveAll(whatsappBilling.clientId, whatsappContacts);
+      setWhatsappContacts(persisted);
+      const saved = persisted.find(candidate => candidate.nome === contact.nome && digits(candidate.celularWhatsapp || candidate.telefone) === phone);
+      if (saved) setSelectedWhatsappContacts(current => current.includes(saved.id) ? current : [...current.filter(id => id !== contactId), saved.id]);
+      setWhatsappFeedback(`WhatsApp de ${contact.nome} salvo no cadastro do cliente.`);
+    } catch (error) {
+      setWhatsappFeedback(error instanceof Error ? `Não foi possível salvar o número: ${error.message}` : 'Não foi possível salvar o número.');
+    } finally { setSavingWhatsappContactId(''); }
+  };
+
+  const selectBoletoFile = (file?: File) => {
+    if (!file) { setBoletoFile(null); return; }
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      setWhatsappFeedback('O boleto precisa ser anexado em formato PDF.');
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      setWhatsappFeedback('O boleto excede o limite de 20 MB.');
+      return;
+    }
+    setBoletoFile(file);
+    setWhatsappFeedback(`Boleto ${file.name} anexado e pronto para envio.`);
   };
 
   const sendNfseByWhatsapp = async () => {
@@ -270,9 +318,23 @@ export default function RecurringBillingQueue({ user, contracts, clients, config
         formData.append('attendantId', user.id || '');
         formData.append('attendantEmail', user.email || '');
         await whatsappApi.sendImage(formData);
+        if (boletoFile) {
+          const boletoData = new FormData();
+          boletoData.append('to', destination);
+          boletoData.append('file', boletoFile, boletoFile.name);
+          boletoData.append('fileName', boletoFile.name);
+          boletoData.append('caption', `Olá, ${contact.nome}. Segue também o boleto referente à NFS-e nº ${number}.`);
+          boletoData.append('clientId', whatsappBilling.clientId);
+          boletoData.append('conversationId', whatsappBilling.clientId);
+          boletoData.append('attendantName', user.nome || 'Sistema CRM');
+          boletoData.append('attendantId', user.id || '');
+          boletoData.append('attendantEmail', user.email || '');
+          await whatsappApi.sendImage(boletoData);
+        }
       }
-      setWhatsappBilling(null); setWhatsappContacts([]); setSelectedWhatsappContacts([]);
-      setMessage(`NFS-e nº ${number} enviada por WhatsApp para ${recipients.length} contato(s).`);
+      const included = boletoFile ? ' e boleto' : '';
+      setWhatsappBilling(null); setWhatsappContacts([]); setSelectedWhatsappContacts([]); setBoletoFile(null); setWhatsappFeedback('');
+      setMessage(`NFS-e nº ${number}${included} enviada por WhatsApp para ${recipients.length} contato(s).`);
     } catch (error) {
       setMessage(error instanceof Error ? `Não foi possível enviar a NFS-e por WhatsApp: ${error.message}` : 'Não foi possível enviar a NFS-e por WhatsApp.');
     } finally { setWhatsappLoading(false); }
@@ -289,7 +351,11 @@ export default function RecurringBillingQueue({ user, contracts, clients, config
     {message && <p className="p-3 text-xs font-bold text-amber-700 bg-amber-50 border-t">{message}</p>}
     {confirming && <div className="p-4 border-t border-blue-200 bg-white"><p className="font-bold">Confirmar emissão individual sequencial</p><p className="text-xs mt-1">Quantidade: {chosen.length} · Total: R$ {total.toLocaleString('pt-BR',{minimumFractionDigits:2})}</p><label className="mt-3 block max-w-sm text-xs font-bold text-slate-700">Senha do certificado A1 <input type="password" value={certificatePassword} onChange={event => setCertificatePassword(event.target.value)} autoComplete="off" placeholder="Digite somente se o cofre não liberar automaticamente" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-normal outline-none focus:border-blue-500" /></label><p className="mt-1 text-[10px] text-slate-500">A senha não é gravada no navegador nem no cadastro; ela permanece somente na memória durante este lote.</p><div className="mt-3 flex gap-2"><button disabled={processing} onClick={() => { setCertificatePassword(''); setConfirming(false); }} className="px-3 py-2 border rounded-lg text-xs font-bold">VOLTAR</button><button disabled={processing} onClick={() => void processSequentially()} className="px-3 py-2 bg-slate-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">{processing ? 'VALIDANDO A1 E PROCESSANDO...' : 'CONFIRMAR EMISSÃO'}</button></div></div>}
 
-    {whatsappBilling && <div className="fixed inset-0 z-[190] flex items-center justify-center bg-black/45 p-4"><div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl"><div className="flex items-start justify-between gap-3"><div><h2 className="font-extrabold text-slate-900">Enviar nota fiscal pelo WhatsApp</h2><p className="mt-1 text-xs text-slate-500">NFS-e nº {whatsappBilling.nfseNumber || '-'} · {whatsappBilling.clientName}</p></div><button type="button" onClick={() => setWhatsappBilling(null)}><X size={20}/></button></div><p className="mt-4 text-xs text-slate-600">Selecione quem receberá o DANFSe oficial em PDF. Os contatos marcados como <strong>Recebe nota fiscal</strong> já aparecem selecionados.</p><div className="mt-4 max-h-64 space-y-2 overflow-y-auto">{whatsappContacts.map(contact => { const phone = contact.celularWhatsapp || contact.telefone || ''; const checked = selectedWhatsappContacts.includes(contact.id); return <label key={contact.id} className="flex cursor-pointer items-center gap-3 rounded-xl border p-3"><input type="checkbox" checked={checked} onChange={() => setSelectedWhatsappContacts(current => checked ? current.filter(id => id !== contact.id) : [...current, contact.id])}/><div className="min-w-0"><div className="font-bold text-slate-800">{contact.nome}</div><div className="text-xs text-slate-500">{contact.departamento || contact.cargo || 'Contato'} · {phone}</div></div>{contact.recebeNotaFiscal && <span className="ml-auto rounded-full bg-emerald-50 px-2 py-1 text-[9px] font-bold uppercase text-emerald-700">Recebe NFS-e</span>}</label>; })}</div><div className="mt-5 flex justify-end gap-2"><button type="button" disabled={whatsappLoading} onClick={() => setWhatsappBilling(null)} className="rounded-xl border px-4 py-2 text-xs font-bold">CANCELAR</button><button type="button" disabled={whatsappLoading || !selectedWhatsappContacts.length} onClick={() => void sendNfseByWhatsapp()} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-40"><Send size={14}/>{whatsappLoading ? 'ENVIANDO...' : 'ENVIAR DANFSe'}</button></div></div></div>}
+    {whatsappBilling && <div className="fixed inset-0 z-[190] flex items-center justify-center bg-black/45 p-4"><div className="max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl"><div className="flex items-start justify-between gap-3"><div><h2 className="font-extrabold text-slate-900">Enviar nota fiscal pelo WhatsApp</h2><p className="mt-1 text-xs text-slate-500">NFS-e nº {whatsappBilling.nfseNumber || '-'} · {whatsappBilling.clientName}</p></div><button type="button" onClick={() => { setWhatsappBilling(null); setBoletoFile(null); setWhatsappFeedback(''); }}><X size={20}/></button></div>
+      <section className="mt-4 rounded-xl border p-4"><h3 className="text-xs font-extrabold uppercase text-slate-700">1. Contatos e números</h3><p className="mt-1 text-xs text-slate-500">Edite o WhatsApp quando necessário e salve. Os contatos marcados como <strong>Recebe nota fiscal</strong> aparecem selecionados automaticamente.</p><div className="mt-3 max-h-72 space-y-3 overflow-y-auto">{whatsappContacts.map(contact => { const phone = contact.celularWhatsapp || contact.telefone || ''; const validPhone = digits(phone).length >= 10 && digits(phone).length <= 13; const checked = selectedWhatsappContacts.includes(contact.id); return <div key={contact.id} className={`rounded-xl border p-3 ${checked ? 'border-emerald-300 bg-emerald-50/40' : ''}`}><div className="flex items-center gap-2"><input type="checkbox" disabled={!validPhone} checked={checked} onChange={() => setSelectedWhatsappContacts(current => checked ? current.filter(id => id !== contact.id) : [...current, contact.id])}/><div className="min-w-0 flex-1"><div className="font-bold text-slate-800">{contact.nome}</div><div className="text-[10px] text-slate-500">{contact.departamento || contact.cargo || 'Contato'}</div></div>{contact.recebeNotaFiscal && <span className="rounded-full bg-emerald-100 px-2 py-1 text-[9px] font-bold uppercase text-emerald-700">Recebe NFS-e</span>}</div><div className="mt-2 flex gap-2"><input aria-label={`WhatsApp de ${contact.nome}`} value={contact.celularWhatsapp || ''} onChange={event => changeWhatsappNumber(contact.id, event.target.value)} placeholder="WhatsApp com DDD" className={`min-w-0 flex-1 rounded-lg border px-3 py-2 text-xs outline-none ${validPhone ? 'border-slate-300 focus:border-emerald-500' : 'border-amber-300 bg-amber-50'}`}/><button type="button" disabled={!!savingWhatsappContactId || !validPhone} onClick={() => void saveWhatsappNumber(contact.id)} className="inline-flex items-center gap-1 rounded-lg border border-emerald-600 px-3 py-2 text-[10px] font-bold text-emerald-700 disabled:opacity-40"><Save size={13}/>{savingWhatsappContactId === contact.id ? 'SALVANDO...' : 'SALVAR'}</button></div>{!validPhone && <p className="mt-1 text-[10px] font-semibold text-amber-700">Informe DDD + número para habilitar este contato.</p>}</div>; })}</div></section>
+      <section className="mt-3 rounded-xl border p-4"><h3 className="text-xs font-extrabold uppercase text-slate-700">2. Boleto opcional</h3><p className="mt-1 text-xs text-slate-500">Anexe o boleto em PDF para enviá-lo junto com o DANFSe. O boleto será enviado como um segundo documento.</p><label className="mt-3 flex cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed border-blue-200 bg-blue-50 px-4 py-4 text-xs font-bold text-blue-700 hover:border-blue-400"><Paperclip size={16}/>{boletoFile ? `Boleto anexado: ${boletoFile.name}` : 'ANEXAR BOLETO EM PDF'}<input type="file" accept="application/pdf,.pdf" className="hidden" onChange={event => selectBoletoFile(event.target.files?.[0])}/></label>{boletoFile && <button type="button" onClick={() => { setBoletoFile(null); setWhatsappFeedback('Boleto removido do envio.'); }} className="mt-2 text-[10px] font-bold text-rose-600 underline">REMOVER BOLETO</button>}</section>
+      {whatsappFeedback && <p className={`mt-3 rounded-lg px-3 py-2 text-xs font-semibold ${whatsappFeedback.startsWith('Não') || whatsappFeedback.startsWith('Informe') || whatsappFeedback.includes('excede') || whatsappFeedback.includes('precisa') ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>{whatsappFeedback}</p>}
+      <div className="mt-5 flex justify-end gap-2"><button type="button" disabled={whatsappLoading} onClick={() => { setWhatsappBilling(null); setBoletoFile(null); setWhatsappFeedback(''); }} className="rounded-xl border px-4 py-2 text-xs font-bold">CANCELAR</button><button type="button" disabled={whatsappLoading || !selectedWhatsappContacts.length} onClick={() => void sendNfseByWhatsapp()} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-40"><Send size={14}/>{whatsappLoading ? 'ENVIANDO...' : boletoFile ? 'ENVIAR DANFSe + BOLETO' : 'ENVIAR DANFSe'}</button></div></div></div>}
 
     {editing && <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/45 p-4"><div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white shadow-2xl"><div className="sticky top-0 z-10 flex items-center justify-between border-b bg-white p-5"><div><h2 className="font-extrabold text-slate-900">Pendências para emissão da NFS-e</h2><p className="text-xs text-slate-500">{editing.clientName} · {editing.contractNumber}</p></div><button onClick={() => setEditing(null)}><X size={20}/></button></div>
       <div className="p-5">{editing.sefinError && <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900"><div className="font-extrabold">Erro retornado pela SEFIN {editing.sefinError.code ? `· ${editing.sefinError.code}` : ''}</div><div className="mt-1">{editing.sefinError.message}</div><div className="mt-2 text-xs"><strong>Orientação:</strong> {failureGuidance(editing.sefinError.code, editing.sefinError.message).detail}</div></div>}<div className="mb-5 space-y-2 rounded-xl border p-4">{issues.length ? issues.map(issue => <div key={issue.key} className="flex items-center gap-2 text-sm text-rose-700"><AlertTriangle size={15}/><span>{issue.label}</span><span className="ml-auto text-[10px] uppercase text-slate-400">Salvar em {issue.origin === 'cliente' ? 'Dados do cliente' : issue.origin === 'contrato' ? 'Dados fiscais do contrato' : 'Configuração fiscal'}</span></div>) : <div className="flex items-center gap-2 text-emerald-700"><CheckCircle2 size={16}/> Todos os dados locais estão válidos. Salve para liberar uma nova tentativa manual.</div>}</div>
